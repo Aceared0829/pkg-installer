@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>pkg-installer — 免 root 装 .deb / .rpm / .AppImage / .flatpak</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 48px 24px 96px;
+    font: 16px/1.7 system-ui, "Noto Sans CJK SC", "PingFang SC", sans-serif;
+    background: #fafafb; color: #323236;
+    display: flex; justify-content: center;
+  }
+  @media (prefers-color-scheme: dark) { body { background: #222226; color: #e6e6e8; } }
+  main { width: 100%; max-width: 720px; }
+  h1 { font-size: 30px; line-height: 1.25; margin: 0 0 8px; letter-spacing: -0.02em; }
+  .sub { color: #6b6b73; margin: 0 0 32px; }
+  @media (prefers-color-scheme: dark) { .sub { color: #a0a0a8; } }
+  h2 { font-size: 19px; margin: 36px 0 12px; }
+  p { margin: 0 0 14px; }
+  pre {
+    background: #fff; border: 1px solid #e6e6e9; border-radius: 12px;
+    padding: 16px 18px; overflow-x: auto; margin: 0 0 16px;
+    font: 13.5px/1.65 ui-monospace, "JetBrains Mono", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    pre { background: #2a2a2e; border-color: #3a3a40; }
+  }
+  code { font-family: ui-monospace, "JetBrains Mono", Menlo, monospace; font-size: 0.92em; }
+  p code { background: rgba(127,127,127,0.12); padding: 1px 5px; border-radius: 5px; }
+  a { color: #2b6cb0; }
+  @media (prefers-color-scheme: dark) { a { color: #74a8e8; } }
+  .note {
+    border-left: 3px solid #d9a441; background: rgba(217,164,65,0.08);
+    padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 0 0 16px; font-size: 14.5px;
+  }
+  footer { margin-top: 48px; padding-top: 20px; border-top: 1px solid #e6e6e9; font-size: 14px; color: #6b6b73; }
+  @media (prefers-color-scheme: dark) { footer { border-color: #3a3a40; color: #a0a0a8; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>pkg-installer</h1>
+  <p class="sub">在 Arch 上装 <code>.deb</code> / <code>.rpm</code> / <code>.AppImage</code> / <code>.flatpak</code>，免 root，不污染 pacman 数据库。</p>
+
+  <p>这是一个 pacman 仓库。加进去之后，它就和官方库里的包一样，能用 <code>pacman -Syu</code> 一起升级。</p>
+
+  <h2>加仓库</h2>
+  <pre><code># /etc/pacman.conf 末尾追加
+[pkg-installer]
+Server = https://aceared0829.github.io/pkg-installer/x86_64
+
+# 然后
+sudo pacman -Sy
+sudo pacman -S pkg-installer</code></pre>
+
+  <div class="note">
+    仓库没有签名。不想改 <code>SigLevel</code> 的话，直接下包安装也一样：<br>
+    <code>sudo pacman -U https://aceared0829.github.io/pkg-installer/x86_64/pkg-installer-2.2.0-1-any.pkg.tar.zst</code>
+  </div>
+
+  <h2>或者装进 ~/.local，完全不用 root</h2>
+  <pre><code>curl -fsSL https://raw.githubusercontent.com/Aceared0829/pkg-installer/main/install.sh | bash</code></pre>
+
+  <h2>它做三件事</h2>
+  <p><strong>先告诉你有没有更好的办法。</strong>拿到包先搜 pacman 官方库和 AUR，搜到了就亮黄条，附一条可以直接粘的命令。用原生包意味着以后 <code>pacman -Syu</code> 就能升级。</p>
+  <p><strong>把依赖名翻译成 Arch 的。</strong>deb 写包名、rpm 写 soname，两张表分开翻。缺什么就红条列出来，附 <code>sudo pacman -S --needed ...</code>。不认识的名字单独归类，不假装「依赖齐全」。</p>
+  <p><strong>解包、链接、导图标，全程不要 root。</strong>装进 <code>~/.local/opt/&lt;包名&gt;/</code>，链一条命令、写一个桌面条目。卸载就是删掉那个目录和几条软链。</p>
+
+  <footer>
+    <a href="https://github.com/Aceared0829/pkg-installer">源码与文档</a> ·
+    <a href="https://github.com/Aceared0829/pkg-installer/releases">发布记录</a> ·
+    MIT
+  </footer>
+</main>
+</body>
+</html>
