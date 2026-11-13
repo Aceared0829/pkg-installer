@@ -13,7 +13,7 @@ optdepends=(
   'flatpak: install .flatpak bundles'
 )
 source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
-sha256sums=('89aa7485ff92df573dec1be6d5805ec14b1a6d47c03efd2966263968295f8d06')
+sha256sums=('c421b896a001a7fa33d17005e7597c2cf23fed6b11a96732a9fa85be463b36a9')
 
 package() {
   install -Dm755 "$srcdir/$pkgname-$pkgver/bin/pkg2local"     "$pkgdir/usr/bin/pkg2local"

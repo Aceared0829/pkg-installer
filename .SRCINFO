@@ -1,6 +1,6 @@
 pkgbase = pkg-installer
 	pkgdesc = Install .deb, .rpm, .AppImage and .flatpak packages on Arch Linux without root, into your home directory
-	pkgver = 2.1.0
+	pkgver = 2.2.0
 	pkgrel = 1
 	url = https://github.com/Aceared0829/pkg-installer
 	arch = any
@@ -13,7 +13,7 @@ pkgbase = pkg-installer
 	optdepends = dpkg: read .deb headers (falls back to bsdtar)
 	optdepends = rpm-tools: read .rpm headers (falls back to the built-in python parser)
 	optdepends = flatpak: install .flatpak bundles
-	source = pkg-installer-2.1.0.tar.gz::https://github.com/Aceared0829/pkg-installer/archive/v2.1.0.tar.gz
-	sha256sums = 89aa7485ff92df573dec1be6d5805ec14b1a6d47c03efd2966263968295f8d06
+	source = pkg-installer-2.2.0.tar.gz::https://github.com/Aceared0829/pkg-installer/archive/v2.2.0.tar.gz
+	sha256sums = c421b896a001a7fa33d17005e7597c2cf23fed6b11a96732a9fa85be463b36a9
 
 pkgname = pkg-installer
