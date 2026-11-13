@@ -11,7 +11,6 @@ optdepends=(
   'dpkg: read .deb headers (falls back to bsdtar)'
   'rpm-tools: read .rpm headers (falls back to the built-in python parser)'
 )
-makedepends=('git')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
 sha256sums=('df313ef69e7157a843db2842a07fe4f9d5ce81b14d8c13b48607613922033ca3')
 

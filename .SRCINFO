@@ -5,7 +5,6 @@ pkgbase = pkg-installer
 	url = https://github.com/Aceared0829/pkg-installer
 	arch = any
 	license = MIT
-	makedepends = git
 	depends = bash
 	depends = libarchive
 	depends = python-gobject
@@ -14,6 +13,6 @@ pkgbase = pkg-installer
 	optdepends = dpkg: read .deb headers (falls back to bsdtar)
 	optdepends = rpm-tools: read .rpm headers (falls back to the built-in python parser)
 	source = pkg-installer-2.0.0.tar.gz::https://github.com/Aceared0829/pkg-installer/archive/v2.0.0.tar.gz
-	sha256sums = SKIP
+	sha256sums = df313ef69e7157a843db2842a07fe4f9d5ce81b14d8c13b48607613922033ca3
 
 pkgname = pkg-installer
