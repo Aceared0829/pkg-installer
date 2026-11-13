@@ -63,7 +63,24 @@
 
 ## 装到你的机器上
 
-**装成系统包**（推荐，能和 `pacman -Syu` 一起升级）：
+**从 pacman 仓库装**（推荐，能和 `pacman -Syu` 一起升级）：
+
+```bash
+# /etc/pacman.conf 末尾追加
+[pkg-installer]
+Server = https://aceared0829.github.io/pkg-installer/x86_64
+
+sudo pacman -Sy
+sudo pacman -S pkg-installer
+```
+
+仓库没签名，不想动 `SigLevel` 的话直接下包：
+
+```bash
+sudo pacman -U https://aceared0829.github.io/pkg-installer/x86_64/pkg-installer-2.2.0-1-any.pkg.tar.zst
+```
+
+**自己编译**：
 
 ```bash
 git clone https://github.com/Aceared0829/pkg-installer.git
@@ -289,6 +306,24 @@ This tool takes a different angle: **instead of turning Arch into Debian or Fedo
 3. **Unpacks, links, imports icons — entirely without root.** Files go to `~/.local/opt/<pkg>/`, a symlink into `~/.local/bin/`, a desktop entry with `Exec=` rewritten to an absolute path. Uninstalling removes those and nothing else.
 
 ### Install
+
+From the pacman repo (upgrades with `pacman -Syu`):
+
+```bash
+# append to /etc/pacman.conf
+[pkg-installer]
+Server = https://aceared0829.github.io/pkg-installer/x86_64
+
+sudo pacman -Sy && sudo pacman -S pkg-installer
+```
+
+The repo is unsigned, so alternatively grab the package directly:
+
+```bash
+sudo pacman -U https://aceared0829.github.io/pkg-installer/x86_64/pkg-installer-2.2.0-1-any.pkg.tar.zst
+```
+
+Or without root, into `~/.local`:
 
 ```bash
 git clone https://github.com/Aceared0829/pkg-installer.git
