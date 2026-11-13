@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Name=deb Installer
+Name[zh_CN]=deb 安装器
+GenericName=Debian Package Installer
+GenericName[zh_CN]=DEB 包安装器
+Comment=Install .deb packages into ~/.local on Arch, checking native packages first
+Comment[zh_CN]=把 .deb 装进 ~/.local，先查 Arch 有没有现成的包
+Exec=@EXEC@ %f
+Icon=@ICON@
+Terminal=false
+Categories=System;PackageManager;
+Keywords=deb;package;install;debian;dpkg;
+Keywords[zh_CN]=deb;安装;包;依赖;
+MimeType=application/vnd.debian.binary-package;application/x-deb;
+StartupNotify=true
+StartupWMClass=deb-installer

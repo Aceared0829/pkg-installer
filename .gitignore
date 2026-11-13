@@ -1,0 +1,12 @@
+*.deb
+*.rpm
+*.bak
+*.bak-*
+__pycache__/
+*.pyc
+.venv/
+venv/
+build/
+dist/
+.DS_Store
+*.swp
