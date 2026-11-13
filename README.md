@@ -259,10 +259,11 @@ ln -sfn ~/.local/opt/新包/usr/bin/foo  ~/.local/bin/foo
 
 ```
 bin/pkg2local       后端（bash，1177 行），所有实际逻辑在这里
-bin/pkg-installer   图形前端（Python + GTK4 + libadwaita，1173 行）
+bin/pkg-installer   图形前端（Python + GTK4 + libadwaita，1194 行）
 desktop/            桌面条目模板和应用图标
 docs/screenshots/   真机截图，非设计稿
 install.sh          安装 / 卸载
+PKGBUILD .SRCINFO   Arch 打包配方（src/ pkg/ 等构建产物不入库）
 ```
 
 前端和后端是**严格的调用关系**，不是两份实现：GUI 里的每个动作都是 `subprocess` 调 `pkg2local`，连读包头都走它的 `--meta`，所以两者行为不可能漂移。
