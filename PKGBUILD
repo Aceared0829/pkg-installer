@@ -13,7 +13,7 @@ optdepends=(
 )
 makedepends=('git')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('df313ef69e7157a843db2842a07fe4f9d5ce81b14d8c13b48607613922033ca3')
 
 package() {
   install -Dm755 "$srcdir/$pkgname-$pkgver/bin/pkg2local"     "$pkgdir/usr/bin/pkg2local"
