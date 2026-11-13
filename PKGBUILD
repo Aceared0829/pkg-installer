@@ -1,8 +1,8 @@
 # Maintainer: Acear <zzn1982638980@gmail.com>
 pkgname=pkg-installer
-pkgver=2.0.0
+pkgver=2.1.0
 pkgrel=1
-pkgdesc="Install .deb and .rpm packages on Arch Linux without root, into your home directory"
+pkgdesc="Install .deb, .rpm, .AppImage and .flatpak packages on Arch Linux without root, into your home directory"
 arch=('any')
 url="https://github.com/Aceared0829/pkg-installer"
 license=('MIT')
@@ -10,6 +10,7 @@ depends=('bash' 'libarchive' 'python-gobject' 'gtk4' 'libadwaita')
 optdepends=(
   'dpkg: read .deb headers (falls back to bsdtar)'
   'rpm-tools: read .rpm headers (falls back to the built-in python parser)'
+  'flatpak: install .flatpak bundles'
 )
 source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
 sha256sums=('df313ef69e7157a843db2842a07fe4f9d5ce81b14d8c13b48607613922033ca3')

@@ -10,13 +10,15 @@
 # 不适合：依赖 /usr 绝对路径、装 systemd 服务或内核模块的包 —— 那种用 distrobox。
 set -uo pipefail
 
-VERSION="2.0.0"
+VERSION="2.1.0"
 PROG=$(basename "$0")
 PREFIX="$HOME/.local"
 OPT="$PREFIX/opt"
 BIN="$PREFIX/bin"
 APPS="$PREFIX/share/applications"
 ICONS="$PREFIX/share/icons"
+# flatpak 装的包不在 $OPT 下（它有自己的仓库），记一本账供卸载与列表用
+STATE="$PREFIX/state/pkg2local"
 
 # 尊重 NO_COLOR，方便 GUI 前端调用时剥掉 ANSI
 if [[ -n "${NO_COLOR:-}" || ! -t 1 ]]; then
@@ -290,6 +292,17 @@ soname_pkg() {
 # ---------- 卸载 ----------
 if [[ "${1:-}" == "--uninstall" ]]; then
   name="${2:-}"; [[ -n "$name" ]] || die "用法: $PROG --uninstall <名称>"
+  # flatpak 装的包不落在 $OPT 下，必须先认出来再走对应路线
+  if [[ -f "$STATE/flatpaks" ]] && grep -qxF "$name" "$STATE/flatpaks" 2>/dev/null; then
+    command -v flatpak >/dev/null 2>&1 || die "卸载 flatpak 包需要 flatpak"
+    flatpak uninstall --user -y --noninteractive "$name" || die "flatpak 卸载失败: $name"
+    grep -vxF "$name" "$STATE/flatpaks" > "$STATE/flatpaks.tmp" 2>/dev/null || true
+    mv -f "$STATE/flatpaks.tmp" "$STATE/flatpaks" 2>/dev/null || true
+    # 记账目录里那份 .pkg2local.json 也要清掉，否则 GUI 的「已安装」页还会列着它
+    rm -rf "${OPT:?}/$name"
+    ok "已卸载 $name（flatpak）"
+    exit 0
+  fi
   [[ -d "$OPT/$name" ]] || die "没装过: $OPT/$name"
   # 先删链接再删目录，否则 readlink -f 在目录消失后解析为空
   for l in "$BIN"/*; do
@@ -334,31 +347,61 @@ done
 
 # ---------- 认格式 ----------
 detect_format() {
-  local f=$1 magic
-  magic=$(head -c 4 "$f" 2>/dev/null | od -An -tx1 | tr -d ' \n')
-  case "$magic" in
+  local f=$1 m4 m8 sig
+  m4=$(head -c 4 "$f" 2>/dev/null | od -An -tx1 | tr -d ' \n')
+  case "$m4" in
     edabeedb) echo rpm; return ;;      # \xed\xab\xee\xdb
     '')       ;;                        # 空文件，落到扩展名判断
+    7f454c46)
+      # AppImage 是 ELF，靠偏移 8 处的 "AI\x02" 与普通二进制区分
+      sig=$(head -c 12 "$f" 2>/dev/null | od -An -tx1 | tr -d ' \n')
+      [[ "${sig:16:4}" == "4149" ]] && { echo appimage; return; } ;;
+    666c6174)
+      m8=$(head -c 8 "$f" 2>/dev/null | od -An -tx1 | tr -d ' \n')
+      [[ "$m8" == "666c617470616b00" ]] && { echo flatpak; return; } ;;
   esac
   case "${f,,}" in
     *.deb) echo deb ;;
     *.rpm) echo rpm ;;
+    *.appimage) echo appimage ;;
+    *.flatpak|*.flatpakref) echo flatpak ;;
     *)     echo unknown ;;
   esac
 }
 FMT=$(detect_format "$PKGFILE")
-[[ "$FMT" == "unknown" ]] && die "认不出这个包（只支持 .deb / .rpm）: $PKGFILE"
+[[ "$FMT" == "unknown" ]] && die "认不出这个包（支持 .deb / .rpm / .AppImage / .flatpak）: $PKGFILE"
 
 # ---------- 读包头 ----------
-# 统一产出：PKG VER ARCH DEPSIZE DEPENDS(逗号分隔的原始依赖串)
-if [[ "$FMT" == "deb" ]]; then
+# 统一产出四个变量：PKG VER ARCH DEPENDS（依赖用 \x1f 分隔，后面统一解析）
+# 每种格式一个函数，主流程只按 FMT 分派。新加格式只需多写一个函数。
+
+# deb：优先 dpkg-deb（字段最全）；没有就退回 bsdtar —— deb 就是个 ar 归档，
+# 里面 control.tar.{xz,gz,zst} 用 bsdtar 也能读，所以 dpkg 不再是硬依赖。
+read_meta_deb() {
   command -v dpkg-deb >/dev/null || die "缺 dpkg-deb（sudo pacman -S dpkg）"
   PKG=$(dpkg-deb -f "$PKGFILE" Package 2>/dev/null) || die "不是合法的 .deb: $PKGFILE"
   VER=$(dpkg-deb -f "$PKGFILE" Version 2>/dev/null)
   ARCH=$(dpkg-deb -f "$PKGFILE" Architecture 2>/dev/null)
   # Depends 是逗号分隔；统一成 \x1f 和 rpm 走同一条解析路径
   DEPENDS=$(dpkg-deb -f "$PKGFILE" Depends 2>/dev/null | tr -d '\n' | tr ',' '\037')
-else
+}
+
+# 没有 dpkg-deb 时的 deb 读取：deb 就是 ar 归档，成员是 debian-binary / control.tar.* / data.tar.*。
+# bsdtar 能直接按成员名取出 control，里面的字段和 dpkg-deb -f 完全一致，所以 dpkg 不再是硬依赖。
+read_meta_deb_bsdtar() {
+  local ctl
+  command -v bsdtar >/dev/null 2>&1 || die "读 .deb 需要 dpkg-deb 或 bsdtar 之一：sudo pacman -S libarchive"
+  ctl=$(bsdtar -xOf "$PKGFILE" "control.tar.*" 2>/dev/null | bsdtar -xOf - ./control 2>/dev/null)
+  [[ -n "$ctl" ]] || die "不是合法的 .deb: $PKGFILE"
+  PKG=$(printf '%s\n' "$ctl"     | sed -n 's/^Package: *//p'      | head -1)
+  VER=$(printf '%s\n' "$ctl"     | sed -n 's/^Version: *//p'      | head -1)
+  ARCH=$(printf '%s\n' "$ctl"    | sed -n 's/^Architecture: *//p' | head -1)
+  DEPENDS=$(printf '%s\n' "$ctl" | sed -n 's/^Depends: *//p'      | head -1 | tr ',' '\037')
+  [[ -n "$PKG" ]] || die "不是合法的 .deb（control 里没有 Package 字段）: $PKGFILE"
+}
+
+# rpm：有 rpm 命令就用它（Rich 依赖原样输出）；没有就内置 python 解析头部索引。
+read_meta_rpm() {
   command -v bsdtar >/dev/null || die "缺 bsdtar（sudo pacman -S libarchive）"
   if command -v rpm >/dev/null 2>&1; then
     PKG=$(rpm -qp --qf '%{NAME}' "$PKGFILE" 2>/dev/null)
@@ -424,12 +467,72 @@ PYEOF
   [[ -n "${PKG:-}" ]] || die "不是合法的 .rpm: $PKGFILE"
   # rpm 的依赖分隔符：rpm 命令走 ;;，内置解析器走 \x1f，统一成 \x1f
   DEPENDS=$(printf '%s' "${DEPENDS:-}" | sed 's/;;/\x1f/g')
-fi
+}
+
+# AppImage：ELF 头 + 内嵌 squashfs，自带 runtime。
+# 元数据直接从自带的 .desktop 读，不需要完整解包 —— --appimage-extract 支持 pattern，
+# 只解出命中的那一个文件（实测 4ms，完整解包要 1G 磁盘）。
+# 注意：一次只能传一个 pattern，传两个就 exit=1。
+read_meta_appimage() {
+  local d dt m1 m2
+  [[ -x "$PKGFILE" ]] || die "这个 AppImage 没有执行权限，先 chmod +x 再试: $PKGFILE"
+  d=$(mktemp -d) || die "建不了临时目录"
+  ( cd "$d" && "$PKGFILE" --appimage-extract '*.desktop' ) >/dev/null 2>&1
+  dt=$(find "$d/squashfs-root" -maxdepth 1 -name '*.desktop' 2>/dev/null | head -1)
+  [[ -n "$dt" ]] || { rm -rf "$d"; die "这个 AppImage 里没有 .desktop，认不出是什么应用: $PKGFILE"; }
+  # 包名用 desktop 文件名，比 Name= 更适合当目录名/命令名
+  PKG=$(basename "$dt" .desktop | tr 'A-Z' 'a-z')
+  VER=$(sed -n 's/^X-AppImage-Version=//p' "$dt" | head -1)
+  [[ -n "$VER" ]] || VER="AppImage"
+  # 架构从 ELF 头 e_machine（偏移 18，小端 2 字节）读，别靠猜文件名
+  m1=$(dd if="$PKGFILE" bs=1 skip=18 count=1 2>/dev/null | od -An -tu1 | tr -d ' \n')
+  m2=$(dd if="$PKGFILE" bs=1 skip=19 count=1 2>/dev/null | od -An -tu1 | tr -d ' \n')
+  case "$(( ${m1:-0} + ${m2:-0} * 256 ))" in
+    62)  ARCH=amd64 ;;      # 0x3e x86-64
+    183) ARCH=arm64 ;;      # 0xb7 aarch64
+    3)   ARCH=i386 ;;       # 0x03
+    40)  ARCH=armhf ;;      # 0x28
+    *)   ARCH="" ;;
+  esac
+  rm -rf "$d"
+  # AppImage 自带全部依赖，没有可声明的包级依赖可查
+  DEPENDS=""
+}
+
+# flatpak bundle：头部是"名字-值"序列（flatpak\0 / "ref" / ref 串 / "metadata" / metadata 文本 / …），
+# 偏移 0x10 起能直接读到 app/<id>/<arch>/<branch> 和 [Application] 段，纯文本，不必调 flatpak。
+read_meta_flatpak() {
+  local d ref rt
+  command -v flatpak >/dev/null 2>&1 || die "装 .flatpak 需要 flatpak：sudo pacman -S flatpak"
+  d=$(mktemp) || die "建不了临时文件"
+  head -c 262144 "$PKGFILE" > "$d" 2>/dev/null
+  ref=$(tr '\000' '\n' < "$d" | grep -m1 -E '^(app|runtime)/[A-Za-z0-9._-]+/[A-Za-z0-9_]+/[A-Za-z0-9._-]+$')
+  [[ -n "$ref" ]] || { rm -f "$d"; die "读不出这个 .flatpak 的 ref，可能不是 flatpak 单文件包: $PKGFILE"; }
+  PKG=$(printf '%s' "$ref" | cut -d/ -f2)          # 应用 ID，例如 org.gnome.FileRoller
+  ARCH=$(printf '%s' "$ref" | cut -d/ -f3)         # x86_64
+  VER=$(printf '%s' "$ref" | cut -d/ -f4)          # 分支名，flatpak 包本身不带版本号
+  rt=$(tr '\000' '\n' < "$d" | grep -m1 '^runtime=' | cut -d= -f2-)
+  rm -f "$d"
+  # flatpak 的"依赖"就是它的 runtime，交给 flatpak 自己拉，这里只展示
+  DEPENDS="${rt:-}"
+}
+
+# 按格式分派：新加一种格式，只多写一个 read_meta_<格式> 函数 + 这里一行
+case "$FMT" in
+  deb)
+    if command -v dpkg-deb >/dev/null 2>&1; then read_meta_deb; else read_meta_deb_bsdtar; fi ;;
+  rpm)       read_meta_rpm ;;
+  appimage)  read_meta_appimage ;;
+  flatpak)   read_meta_flatpak ;;
+  *)         die "不认识这个格式: $FMT" ;;
+esac
 
 # 展示用的依赖串：内部 \x1f 分隔符换成逗号，Rich 依赖组 (a,or,b) 压成 "a 或 b"
 DEPS_SHOW=""
 if [[ -n "$DEPENDS" ]]; then
-  DEPS_SHOW=$(printf '%s' "$DEPENDS" | tr '\037' '\n' | while IFS= read -r seg; do
+  # 末尾必须补换行：while read 在最后一段没有换行符时会读失败退出，
+  # 最后一个依赖会被静默吞掉（Obsidian 声明 5 个只显示 4 个就是这个原因）。
+  DEPS_SHOW=$(printf '%s\n' "$DEPENDS" | tr '\037' '\n' | while IFS= read -r seg; do
     if [[ "$seg" == "("* ]]; then
       inner="${seg#(}"; inner="${inner%)}"
       printf '('; printf '%s' "$inner" | sed 's/,or,/ 或 /g'; printf ')'
@@ -661,7 +764,15 @@ PYEOF
 
 # ---------- 2. 依赖检查 ----------
 missing=(); unknown=()
-if [[ $META_ONLY -eq 0 ]]; then
+# AppImage 自带运行时，flatpak 的 "依赖" 是它自己的 runtime（由 flatpak 解析）——
+# 这两种都不该拿 deb/rpm 的映射表来查，查了只会全报 unknown。
+if [[ $META_ONLY -eq 0 && "$FMT" == "appimage" ]]; then
+  say "--- 依赖检查 ---"
+  ok "AppImage 自带运行时，不需要系统依赖"
+elif [[ $META_ONLY -eq 0 && "$FMT" == "flatpak" ]]; then
+  say "--- 依赖检查 ---"
+  ok "依赖由 flatpak 的 runtime 提供，安装时由 flatpak 自动拉取"
+elif [[ $META_ONLY -eq 0 ]]; then
   say "--- 检查运行时依赖 ---"
 
   # 判断单个 rpm 依赖项；输出 "ok" / "missing:<Arch包>" / "unknown"
@@ -790,46 +901,26 @@ if [[ $JSON_MODE -eq 1 ]]; then
   exit 0
 fi
 
-if [[ ${#unknown[@]} -gt 0 ]]; then
-  warn "这 ${#unknown[@]} 项没收录映射，需自己确认：${unknown[*]}"
-fi
-if [[ ${#missing[@]} -gt 0 ]]; then
-  warn "缺少 ${#missing[@]} 个依赖包，先用以下命令补齐："
-  printf '  %ssudo pacman -S --needed %s%s\n' "$C_CYN" "${missing[*]}" "$C_OFF"
-elif [[ ${#unknown[@]} -eq 0 ]]; then
-  ok "声明的依赖在系统里都找得到"
+# AppImage / flatpak 不走映射表，上面已经分别给过结论，这里不要再补一句
+if [[ "$FMT" == "deb" || "$FMT" == "rpm" ]]; then
+  if [[ ${#unknown[@]} -gt 0 ]]; then
+    warn "这 ${#unknown[@]} 项没收录映射，需自己确认：${unknown[*]}"
+  fi
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    warn "缺少 ${#missing[@]} 个依赖包，先用以下命令补齐："
+    printf '  %ssudo pacman -S --needed %s%s\n' "$C_CYN" "${missing[*]}" "$C_OFF"
+  elif [[ ${#unknown[@]} -eq 0 ]]; then
+    ok "声明的依赖在系统里都找得到"
+  fi
 fi
 
 [[ $DEPS_ONLY -eq 1 ]] && exit 0
 
-# ---------- 3. 解包 ----------
+# ---------- 3. 落地（每种格式语义不同）----------
 DEST="$OPT/$PKG"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
-say "--- 解包到 $DEST ---"
-if [[ "$FMT" == "deb" ]]; then
-  dpkg-deb -x "$PKGFILE" "$TMP/root" || die "解包失败"
-else
-  mkdir -p "$TMP/root"
-  # 首选：libarchive 直接吃 RPM（省一次解压落盘）
-  if ! bsdtar -xf "$PKGFILE" -C "$TMP/root" 2>/dev/null; then
-    # 回退：自己切 payload → 解压 → 当 cpio 读。
-    # 有些厂商的 RPM（例如 Google Chrome）payload 里的 cpio magic 被改坏了，
-    # libarchive 一律拒收，但逐条解析仍然能恢复出文件。
-    say "bsdtar 读不了这个 RPM，退回手工解包…"
-    rpm_payload_extract "$PKGFILE" "$TMP/root" \
-      || die "解包失败（这个 RPM 的 payload 结构不标准，手工解析也读不了）"
-  fi
-fi
 
-mkdir -p "$DEST" "$BIN" "$APPS" "$ICONS"
-cp -a "$TMP/root/." "$DEST/"
-
-# 记录本包自己带的可执行/库目录，供 AppRun 式定位用
-find "$DEST" -name '*.so*' -type f 2>/dev/null > "$DEST/.pkg2local-solist"
-
-# ---------- 4. 链接可执行文件 ----------
-say "--- 链接命令到 $BIN ---"
 shopt -s nullglob
 declare -a mains=()
 # 已有同名命令且不是我们自己的软链 → 先备份，绝不静默覆盖用户的东西
@@ -846,17 +937,142 @@ safe_link() {
   ln -sfn "$target" "$BIN/$bn"
   ok "$BIN/$bn → $target"
 }
-for exe in "$DEST"/usr/bin/* "$DEST"/opt/*/bin/*; do
-  [[ -f "$exe" && -x "$exe" ]] || continue
-  safe_link "$exe" "$(basename "$exe")"
-  mains+=("$exe")
-done
-for exe in "$DEST"/usr/local/bin/*; do
-  [[ -f "$exe" && -x "$exe" ]] || continue
-  safe_link "$exe" "$(basename "$exe")"
-done
 
-# ---------- 5. 桌面条目与图标 ----------
+# 平铺的 deb / rpm：解包到 $TMP/root，再整体搬进 $DEST
+stage_tree() {
+  say "--- 解包到 $DEST ---"
+  if [[ "$FMT" == "deb" ]]; then
+    # dpkg-deb 解出来的权限/属主最准；没有 dpkg 就退回 bsdtar（deb 是 ar 归档）
+    dpkg-deb -x "$PKGFILE" "$TMP/root" 2>/dev/null \
+      || bsdtar -xf "$PKGFILE" -C "$TMP/root" 2>/dev/null \
+      || die "解包失败"
+  else
+    mkdir -p "$TMP/root"
+    # 首选：libarchive 直接吃 RPM（省一次解压落盘）
+    if ! bsdtar -xf "$PKGFILE" -C "$TMP/root" 2>/dev/null; then
+      # 回退：自己切 payload → 解压 → 当 cpio 读。
+      # 有些厂商的 RPM（例如 Google Chrome）payload 里的 cpio magic 被改坏了，
+      # libarchive 一律拒收，但逐条解析仍然能恢复出文件。
+      say "bsdtar 读不了这个 RPM，退回手工解包…"
+      rpm_payload_extract "$PKGFILE" "$TMP/root" \
+        || die "解包失败（这个 RPM 的 payload 结构不标准，手工解析也读不了）"
+    fi
+  fi
+
+  mkdir -p "$DEST"
+  cp -a "$TMP/root/." "$DEST/"
+
+  # 记录本包自己带的可执行/库目录，供 AppRun 式定位用
+  find "$DEST" -name '*.so*' -type f 2>/dev/null > "$DEST/.pkg2local-solist"
+
+  # ---------- 4. 链接可执行文件 ----------
+  say "--- 链接命令到 $BIN ---"
+  local exe
+  for exe in "$DEST"/usr/bin/* "$DEST"/opt/*/bin/*; do
+    [[ -f "$exe" && -x "$exe" ]] || continue
+    safe_link "$exe" "$(basename "$exe")"
+    mains+=("$exe")
+  done
+  for exe in "$DEST"/usr/local/bin/*; do
+    [[ -f "$exe" && -x "$exe" ]] || continue
+    safe_link "$exe" "$(basename "$exe")"
+  done
+}
+
+# AppImage：自包含，不需要「解包安装」。
+# 正确语义是把它当一个整体搬进 ~/.local/opt，再链命令 + 生成桌面条目。
+# 抄而不是移：用户原来那个文件留在原地，卸载时也不碰它。
+install_appimage() {
+  say "--- 安装 AppImage 到 $DEST ---"
+  mkdir -p "$DEST" "$BIN"
+  local target="$DEST/$(basename "$PKGFILE")"
+  # btrfs / xfs 上 reflink 是零拷贝；不支持的 fs 自动退化成普通复制
+  cp --reflink=auto --preserve=mode,timestamps "$PKGFILE" "$target" 2>/dev/null \
+    || cp --preserve=mode,timestamps "$PKGFILE" "$target" \
+    || die "拷不动这个 AppImage"
+  chmod +x "$target"
+  ok "已放到 $target"
+
+  # desktop 里的 Exec 首词是 AppRun，对用户没意义，命令名用应用名
+  local cmd
+  cmd=$(printf '%s' "$PKG" | tr -d ' ')
+  safe_link "$target" "$cmd"
+  mains+=("$target")
+
+  say "--- 导入桌面条目 ---"
+  # --appimage-extract 把 squashfs-root 解到【当前工作目录】，
+  # 不切目录会污染用户当前所在的文件夹；而且一次只能传一个 pattern（传两个就 exit=1）。
+  local wd src out ic png
+  wd=$(mktemp -d) || die "建不了临时目录"
+  ( cd "$wd" && "$target" --appimage-extract '*.desktop' ) >/dev/null 2>&1
+  src=$(find "$wd/squashfs-root" -maxdepth 1 -name '*.desktop' 2>/dev/null | head -1)
+  if [[ -n "$src" ]]; then
+    out="$APPS/$(basename "$src")"
+    # Exec 首词换成绝对路径，%U / %F 这些占位符原样留着
+    sed -e "s|^Exec=[^ ]*|Exec=$target|" \
+        -e "s|^TryExec=.*|TryExec=$target|" "$src" > "$out"
+
+    ic=$(sed -n 's/^Icon=//p' "$out" | head -1)
+    if [[ -n "$ic" && "$ic" != /* ]]; then
+      # 图标位置各家不一样：顶层可能只是个指向 hicolor/<尺寸>/apps/ 的软链。
+      # 软链单独抽出来是断的（cp 会报 stat 失败），所以第二遍把整个 icons 目录抽出来，
+      # 再按真实文件大小挑最大的那个 —— 尺寸越大的越清晰。
+      ( cd "$wd" && rm -rf squashfs-root && "$target" --appimage-extract "${ic}.png" ) >/dev/null 2>&1
+      png=""
+      if [[ -f "$wd/squashfs-root/${ic}.png" ]]; then
+        png="$wd/squashfs-root/${ic}.png"
+      else
+        ( cd "$wd" && rm -rf squashfs-root && "$target" --appimage-extract 'usr/share/icons/*' ) >/dev/null 2>&1
+        png=$(find "$wd/squashfs-root" -name '*.png' -type f -printf '%s %p\n' 2>/dev/null \
+              | sort -n | tail -1 | cut -d' ' -f2-)
+      fi
+      if [[ -n "$png" && -f "$png" ]]; then
+        mkdir -p "$ICONS"
+        cp -f "$png" "$ICONS/$(basename "$png")"
+        sed -i "s|^Icon=.*|Icon=$ICONS/$(basename "$png")|" "$out"
+        ok "图标 → $ICONS/$(basename "$png")"
+      else
+        warn "这个 AppImage 里没抽到图标，应用菜单会显示默认图标"
+      fi
+    fi
+    ok "$out"
+  else
+    warn "这个 AppImage 里没有 .desktop，只链了命令，应用菜单里不会出现"
+  fi
+  rm -rf "$wd"
+
+  # AppImage 是压缩镜像不是可解析的 ELF，没有包级依赖可查
+  find "$DEST" -name '*.so*' -type f 2>/dev/null > "$DEST/.pkg2local-solist"
+}
+
+# flatpak bundle：完全委派给 flatpak。
+# runtime、沙箱、图标、桌面条目都由它管，我们只调用 + 记账。
+install_flatpak() {
+  command -v flatpak >/dev/null 2>&1 || die "装 .flatpak 需要 flatpak：sudo pacman -S flatpak"
+  say "--- 交给 flatpak 安装（--user 域，不需要 root）---"
+  if ! flatpak install --user -y --noninteractive --bundle "$PKGFILE"; then
+    die "flatpak 安装失败（常见原因是缺 runtime，先跑 flatpak install flathub <runtime>）"
+  fi
+  # 桌面条目和图标由 flatpak 自己导出到 ~/.local/share/flatpak/exports，不用我们管
+  local exe="$PREFIX/share/flatpak/exports/bin/$PKG"
+  [[ -x "$exe" ]] && mains+=("$exe")
+  # flatpak 的包不在 $OPT 下，靠 STATE 里的清单记住"这是 pkg2local 装的"，
+  # 否则卸载时会找不到、GUI 列表里也不会显示
+  mkdir -p "$STATE" "$DEST"
+  grep -qxF "$PKG" "$STATE/flatpaks" 2>/dev/null || printf '%s\n' "$PKG" >> "$STATE/flatpaks"
+  ok "flatpak 已装：$PKG"
+}
+
+mkdir -p "$BIN" "$APPS" "$ICONS"
+case "$FMT" in
+  deb|rpm)   stage_tree ;;
+  appimage)  install_appimage ;;
+  flatpak)   install_flatpak ;;
+esac
+
+# ---------- 5. 桌面条目与图标（只对 deb / rpm 有意义）----------
+# AppImage 和 flatpak 的桌面条目在各自的 install_* 里已经处理完了。
+if [[ "$FMT" == "deb" || "$FMT" == "rpm" ]]; then
 say "--- 导入桌面条目 ---"
 for dt in "$DEST"/usr/share/applications/*.desktop "$DEST"/opt/*/*.desktop; do
   [[ -f "$dt" ]] || continue
@@ -891,6 +1107,7 @@ find "$DEST/usr/share/icons" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | while
   cp -rn "$d" "$ICONS/" 2>/dev/null
 done
 [[ -d "$DEST/usr/share/pixmaps" ]] && cp -rn "$DEST/usr/share/pixmaps/." "$ICONS/" 2>/dev/null
+fi
 
 # ---------- 6. 动静态检查 ----------
 say "--- 检查可执行文件的缺失共享库 ---"
@@ -931,6 +1148,10 @@ command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -q -t -f "$
 say ""
 ok "装好了：$DEST"
 echo "  卸载: $PROG --uninstall $PKG"
-echo "  若应用报「找不到 /usr/xxx」，说明它硬编码了 /usr 路径 —— 改用："
-echo "    sudo pacman -S distrobox podman && distrobox create -i ubuntu:24.04 -n pkgbox"
-echo "    distrobox enter pkgbox -- sudo dpkg -i $(basename "$PKGFILE")"
+# 后续排错提示只对 deb / rpm 有意义：
+# AppImage 自带运行时，flatpak 用的是它自己的 runtime —— 它们都不会踩 /usr 硬编码的坑
+if [[ "$FMT" == "deb" || "$FMT" == "rpm" ]]; then
+  echo "  若应用报「找不到 /usr/xxx」，说明它硬编码了 /usr 路径 —— 改用："
+  echo "    sudo pacman -S distrobox podman && distrobox create -i ubuntu:24.04 -n pkgbox"
+  echo "    distrobox enter pkgbox -- sudo dpkg -i $(basename "$PKGFILE")"
+fi
