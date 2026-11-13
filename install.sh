@@ -72,10 +72,9 @@ echo "检查依赖..."
 missing=()
 command -v bsdtar >/dev/null || missing+=("libarchive")     # 解 .rpm
 
-# 读 .deb 包头要 dpkg-deb；读 .rpm 包头要 rpm-tools 或 python3（内置解析器）
-if ! command -v dpkg-deb >/dev/null && ! command -v bsdtar >/dev/null; then
-  missing+=("dpkg")
-fi
+# .deb 和 .rpm 都只需要 libarchive：deb 走 bsdtar -xOf 读 control.tar.*，
+# rpm 走 bsdtar 或内置 python 解包器。dpkg / rpm-tools 都是可选的加速项。
+command -v python3 >/dev/null || missing+=("python")
 
 have_gi=0
 if command -v python3 >/dev/null; then
@@ -91,10 +90,10 @@ fi
 if [[ ${#missing[@]} -gt 0 ]]; then
   if command -v pacman >/dev/null; then
     die "缺这些包，先补上：
-  sudo pacman -S --needed dpkg libarchive python-gobject gtk4 libadwaita"
+  sudo pacman -S --needed libarchive python python-gobject gtk4 libadwaita"
   else
     die "缺这些：${missing[*]}
-本项目只支持 Arch 系（需要 pacman + dpkg-deb / bsdtar）。"
+本项目只支持 Arch 系（需要 pacman + bsdtar）。"
   fi
 fi
 ok "依赖齐全"
@@ -126,19 +125,27 @@ ok "$ICONS/scalable/apps/pkg-installer.svg"
 command -v update-desktop-database >/dev/null && update-desktop-database "$APPS" 2>/dev/null || true
 command -v gtk-update-icon-cache    >/dev/null && gtk-update-icon-cache -q -t -f "$ICONS" 2>/dev/null || true
 
-# 把 .deb / .rpm 文件关联到这个程序
+# 把 .deb / .rpm / .flatpak 文件关联到这个程序
+# （AppImage 没有统一的 MIME 类型，各系统的 shared-mime-info 里叫法不一，不注册）
 if command -v xdg-mime >/dev/null; then
   for m in application/vnd.debian.binary-package application/x-deb \
-           application/x-rpm application/x-redhat-package-manager; do
+           application/x-rpm application/x-redhat-package-manager \
+           application/vnd.flatpak application/x-flatpak \
+           application/vnd.flatpak.ref application/vnd.flatpak.repo; do
     xdg-mime default pkg-installer.desktop "$m" 2>/dev/null || true
   done
+fi
+
+# flatpak 是可选的，但装了 .flatpak 文件才用得上，提醒一句
+if ! command -v flatpak >/dev/null; then
+  warn "没装 flatpak —— 只能装 .deb / .rpm / .AppImage。要用 .flatpak 的话：sudo pacman -S flatpak"
 fi
 
 echo
 ok "装好了"
 echo "  打开界面:  pkg-installer"
-echo "  命令行:    pkg2local 包.deb     （.rpm 一样）"
-echo "  双击 .deb / .rpm 也会打开这个界面"
+echo "  命令行:    pkg2local 包.deb     （.rpm / .AppImage / .flatpak 一样）"
+echo "  双击 .deb / .rpm / .flatpak 也会打开这个界面"
 echo
 case ":$PATH:" in
   *":$BIN:"*) ;;

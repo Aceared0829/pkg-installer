@@ -527,6 +527,15 @@ case "$FMT" in
   *)         die "不认识这个格式: $FMT" ;;
 esac
 
+# 包名统一小写后再当目录名/命令名用。
+# Debian 规范要求包名只含小写，dpkg-deb -f Package 会自动转小写；
+# 但走 bsdtar 回退时读到的是 control 原文（有些厂商写成 Obsidian-1.9），
+# 不归一化的话同一个包在两条路径下会装到不同目录，等于重复安装。
+# flatpak 例外：应用 ID 的大小写是它的一部分（org.gnome.FileRoller）。
+if [[ "$FMT" != "flatpak" ]]; then
+  PKG=$(printf '%s' "$PKG" | tr 'A-Z' 'a-z')
+fi
+
 # 展示用的依赖串：内部 \x1f 分隔符换成逗号，Rich 依赖组 (a,or,b) 压成 "a 或 b"
 DEPS_SHOW=""
 if [[ -n "$DEPENDS" ]]; then
@@ -941,11 +950,16 @@ safe_link() {
 # 平铺的 deb / rpm：解包到 $TMP/root，再整体搬进 $DEST
 stage_tree() {
   say "--- 解包到 $DEST ---"
+  mkdir -p "$TMP/root"
   if [[ "$FMT" == "deb" ]]; then
-    # dpkg-deb 解出来的权限/属主最准；没有 dpkg 就退回 bsdtar（deb 是 ar 归档）
-    dpkg-deb -x "$PKGFILE" "$TMP/root" 2>/dev/null \
-      || bsdtar -xf "$PKGFILE" -C "$TMP/root" 2>/dev/null \
-      || die "解包失败"
+    # dpkg-deb 解出来的权限/属主最准。
+    # 没有 dpkg 时不能直接 bsdtar -xf 这个 .deb —— deb 本身是 ar 归档，
+    # 那样只会取出 control.tar.xz / data.tar.xz 两个成员，不会展开文件树。
+    # 必须先从 ar 里取出 data.tar.*，再让 bsdtar 解它。
+    if ! dpkg-deb -x "$PKGFILE" "$TMP/root" 2>/dev/null; then
+      bsdtar -xOf "$PKGFILE" "data.tar.*" 2>/dev/null | bsdtar -xf - -C "$TMP/root" 2>/dev/null \
+        || die "解包失败（这个 deb 的 data.tar 读不出来，装个 dpkg 再试）"
+    fi
   else
     mkdir -p "$TMP/root"
     # 首选：libarchive 直接吃 RPM（省一次解压落盘）
