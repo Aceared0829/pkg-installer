@@ -186,6 +186,8 @@ AppImage 不是「安装包」，是一个**自带 runtime 的压缩镜像**—�
 - **安装**：`cp --reflink=auto` 把**整个文件**抄进 `~/.local/opt/<名字>/`（btrfs/xfs 上是 reflink，不占额外空间），**原文件保留不动**，然后 `chmod +x`、链一条命令、抠图标、写 desktop 条目
 - **依赖检查**：跳过。`ldd` 对它报「不是动态可执行文件」——它确实不是，squashfs 还没解开呢。运行时由 AppImage 自带的 runtime 负责
 
+![AppImage](docs/screenshots/06-appimage.png)
+
 三个实测踩出来的坑，都体现在代码里：
 
 1. `--appimage-extract` 把 `squashfs-root/` 解到**当前工作目录**。不切目录的话，用户文件夹里会凭空多出一个 `squashfs-root`。所以每次都在 `mktemp -d` 出来的临时目录里执行
@@ -201,6 +203,8 @@ flatpak install --user -y --noninteractive --bundle 包.flatpak
 ```
 
 `--user` 所以不要 root。装完落在 `~/.local/share/flatpak/`，命令导出到 `~/.local/share/flatpak/exports/bin/`，desktop 条目在 `exports/share/applications/`——而这两个路径本来就在 `XDG_DATA_DIRS` 里，所以装完立刻出现在应用菜单。卸载走 `flatpak uninstall --user`，工具只在 `~/.local/state/pkg2local/flatpaks` 里记一笔名字，好让「已安装」页能列出来。
+
+![flatpak](docs/screenshots/07-flatpak.png)
 
 元数据是**纯文本解析**的，不必调 `flatpak` 查：bundle 头是 `flatpak\0` 8 字节 magic，接着是键值序列——`ref` 键后跟 `app/org.gnome.FileRoller/x86_64/stable` 这种 ref 字符串，`metadata` 键后跟一段含 `[Application]` 的文本。只读前 256 KB 就够，用 `tr '\000' '\n'` 把 NUL 换成换行再 grep 即可。
 

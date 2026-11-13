@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Name=pkg Installer
+Name[zh_CN]=pkg 安装器
+GenericName=Package Installer for Arch
+GenericName[zh_CN]=Arch 上的安装包安装器
+Comment=Install .deb / .rpm packages into ~/.local on Arch, checking native packages first
+Comment[zh_CN]=把 .deb / .rpm 装进 ~/.local，先查 Arch 有没有现成的包
+Exec=@EXEC@ %f
+Icon=@ICON@
+Terminal=false
+Categories=System;PackageManager;
+Keywords=deb;rpm;package;install;debian;redhat;dpkg;
+Keywords[zh_CN]=deb;rpm;安装;包;依赖;
+MimeType=application/vnd.debian.binary-package;application/x-deb;application/x-rpm;application/x-redhat-package-manager;
+StartupNotify=true
+StartupWMClass=pkg-installer
