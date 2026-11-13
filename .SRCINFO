@@ -14,6 +14,6 @@ pkgbase = pkg-installer
 	optdepends = rpm-tools: read .rpm headers (falls back to the built-in python parser)
 	optdepends = flatpak: install .flatpak bundles
 	source = pkg-installer-2.2.0.tar.gz::https://github.com/Aceared0829/pkg-installer/archive/v2.2.0.tar.gz
-	sha256sums = c421b896a001a7fa33d17005e7597c2cf23fed6b11a96732a9fa85be463b36a9
+	sha256sums = f8e27d96007321e9ca2c88d10e8aebdc1395f13ab281c08c5f410e8f2a201ecc
 
 pkgname = pkg-installer
