@@ -258,8 +258,8 @@ ln -sfn ~/.local/opt/新包/usr/bin/foo  ~/.local/bin/foo
 ## 项目结构
 
 ```
-bin/pkg2local       后端（bash，1157 行），所有实际逻辑在这里
-bin/pkg-installer   图形前端（Python + GTK4 + libadwaita，786 行）
+bin/pkg2local       后端（bash，1171 行），所有实际逻辑在这里
+bin/pkg-installer   图形前端（Python + GTK4 + libadwaita，807 行）
 desktop/            桌面条目模板和应用图标
 docs/screenshots/   真机截图，非设计稿
 install.sh          安装 / 卸载
