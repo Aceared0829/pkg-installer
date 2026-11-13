@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-deb 安装器 — CachyOS/Arch 上的 .deb 图形前端
-套在 ~/.local/bin/deb2local 外面的 GTK4 + libadwaita 壳。
+pkg 安装器 — CachyOS/Arch 上的 .deb / .rpm 图形前端
+套在 ~/.local/bin/pkg2local 外面的 GTK4 + libadwaita 壳。
 
-依赖（都已装在系统里）：python-gobject, gtk4, libadwaita, dpkg
+依赖（都已装在系统里）：python-gobject, gtk4, libadwaita, dpkg, libarchive
 """
 
 import json
@@ -23,26 +23,39 @@ gi.require_version("Gdk", "4.0")
 
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
 
-APP_ID = "io.github.aceared.debinstaller"
-TITLE = "deb 安装器"
-VERSION = "1.0.0"
+APP_ID = "io.github.aceared.pkginstaller"
+TITLE = "pkg 安装器"
+VERSION = "2.0.0"
+
+# 认的包格式 → 显示名。新增格式只改这里 + 后端的 detect_format
+FORMATS = {".deb": "deb", ".rpm": "rpm"}
+DEFAULT_PICK = ("deb", "rpm")
+
+
+def pkg_format(path: str) -> str:
+    """按扩展名给格式；返回空串表示不认。"""
+    return FORMATS.get(Path(path).suffix.lower(), "")
 
 
 def find_backend() -> str:
-    """后端 deb2local 的定位顺序：环境变量 → 脚本同目录 → PATH → ~/.local/bin"""
-    env = os.environ.get("DEB2LOCAL")
-    if env and os.path.isfile(env):
-        return env
-    here = Path(__file__).resolve().parent / "deb2local"
-    if here.is_file():
-        return str(here)
-    found = shutil.which("deb2local")
-    if found:
-        return found
-    return str(Path.home() / ".local/bin/deb2local")
+    """后端 pkg2local 的定位顺序：环境变量 → 脚本同目录 → PATH → ~/.local/bin"""
+    # 新变量名优先，旧变量名留作兜底（老脚本里还写着 DEB2LOCAL）
+    for var in ("PKG2LOCAL", "DEB2LOCAL"):
+        env = os.environ.get(var)
+        if env and os.path.isfile(env):
+            return env
+    here = Path(__file__).resolve().parent
+    for name in ("pkg2local", "deb2local"):
+        if (here / name).is_file():
+            return str(here / name)
+    for name in ("pkg2local", "deb2local"):
+        found = shutil.which(name)
+        if found:
+            return found
+    return str(Path.home() / ".local/bin/pkg2local")
 
 
-DEB2LOCAL = find_backend()
+BACKEND = find_backend()
 OPT_DIR = Path.home() / ".local/opt"
 BIN_DIR = Path.home() / ".local/bin"
 APPS_DIR = Path.home() / ".local/share/applications"
@@ -54,27 +67,35 @@ C_DIM = "#8f8f8f"
 
 
 # ─────────────────────────── 元数据读取 ───────────────────────────
-def read_deb_meta(path: str) -> dict:
-    """直接用 dpkg-deb 读控制段，不跑 deb2local（快，给 UI 立刻显示用）"""
+def read_pkg_meta(path: str) -> dict:
+    """让后端出包头 JSON（--meta 不联网、不查依赖，够快给 UI 立刻显示）。
+
+    deb 和 rpm 走同一条路，读包头的逻辑只有后端一份，不会漂移。
+    """
     ok = True
-    fields = ("Package", "Version", "Architecture", "Depends", "Installed-Size")
     out = {}
     try:
         r = subprocess.run(
-            ["dpkg-deb", "-f", path, *fields],
-            capture_output=True, text=True, timeout=10,
+            [BACKEND, path, "--meta"],
+            capture_output=True, text=True, timeout=20,
         )
         if r.returncode != 0:
             ok = False
         else:
-            for line in r.stdout.splitlines():
-                if ":" in line:
-                    k, v = line.split(":", 1)
-                    out[k.strip()] = v.strip()
+            data = json.loads(r.stdout.strip().splitlines()[-1])
+            out = {
+                "Package": data.get("package", ""),
+                "Version": data.get("version", ""),
+                "Architecture": data.get("arch", ""),
+                "Depends": data.get("depends_declared", ""),
+                "_format": data.get("format", ""),
+            }
     except Exception:
         ok = False
     out["_valid"] = ok
     out["_file"] = path
+    if not out.get("_format"):
+        out["_format"] = pkg_format(path)
     try:
         out["_size"] = os.path.getsize(path)
     except OSError:
@@ -91,24 +112,28 @@ def human_size(n: int) -> str:
 
 
 def list_installed() -> list[dict]:
-    """扫 ~/.local/opt/*/.deb2local.json"""
+    """扫 ~/.local/opt/*/.pkg2local.json（兼容 1.x 留下的 .deb2local.json）"""
     items = []
     if not OPT_DIR.is_dir():
         return items
     for d in sorted(OPT_DIR.iterdir()):
-        meta = d / ".deb2local.json"
-        if meta.is_file():
+        for name in (".pkg2local.json", ".deb2local.json"):
+            meta = d / name
+            if not meta.is_file():
+                continue
             try:
                 m = json.loads(meta.read_text(encoding="utf-8"))
-                items.append(m)
             except (json.JSONDecodeError, OSError):
-                pass
+                continue
+            m.setdefault("format", "deb" if name == ".deb2local.json" else "")
+            items.append(m)
+            break
     return items
 
 
 # ─────────────────────────── 拖放区 ───────────────────────────
 class DropZone(Gtk.Box):
-    """空态时显示的虚线大框，提示拖入 .deb"""
+    """空态时显示的虚线大框，提示拖入 .deb / .rpm"""
 
     def __init__(self):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=12)
@@ -124,11 +149,11 @@ class DropZone(Gtk.Box):
         icon.add_css_class("dim-label")
         self.append(icon)
 
-        t = Gtk.Label.new("把 .deb 拖进来")
+        t = Gtk.Label.new("把 .deb / .rpm 拖进来")
         t.add_css_class("title-1")
         self.append(t)
 
-        s = Gtk.Label.new("也会先查 Arch 生态有没有现成的包，能直接用就不折腾 deb")
+        s = Gtk.Label.new("也会先查 Arch 生态有没有现成的包，能直接用就不折腾它")
         s.add_css_class("dim-label")
         s.set_wrap(True)
         s.set_justify(Gtk.Justification.CENTER)
@@ -203,20 +228,27 @@ class Window(Adw.ApplicationWindow):
         files = value.get_files() if hasattr(value, "get_files") else []
         for f in files:
             p = f.get_path()
-            if p and p.lower().endswith(".deb"):
+            if p and pkg_format(p):
                 self.load_file(p)
                 return True
-        self.toast.add_toast(Adw.Toast.new("只认 .deb 文件"))
+        self.toast.add_toast(Adw.Toast.new("只认 .deb / .rpm 文件"))
         return False
 
     def pick_file(self):
         dlg = Gtk.FileDialog()
-        dlg.set_title("选择 .deb 包")
-        f = Gtk.FileFilter()
-        f.set_name("Debian 包 (*.deb)")
-        f.add_pattern("*.deb")
+        dlg.set_title("选择安装包")
         filters = Gio.ListStore.new(Gtk.FileFilter)
+        f = Gtk.FileFilter()
+        f.set_name("安装包 (*.deb, *.rpm)")
+        f.add_pattern("*.deb")
+        f.add_pattern("*.rpm")
         filters.append(f)
+        # 逐个格式也给一条，方便只想看某一种的时候筛
+        for ext, label in ((".deb", "Debian 包 (*.deb)"), (".rpm", "RPM 包 (*.rpm)")):
+            one = Gtk.FileFilter()
+            one.set_name(label)
+            one.add_pattern(f"*{ext}")
+            filters.append(one)
         dlg.set_filters(filters)
         dlg.set_default_filter(f)
         try:
@@ -267,18 +299,21 @@ class Window(Adw.ApplicationWindow):
         self.install_box.append(dz)
         self.current_meta = None
 
-    # ── 载入一个 deb ────────────────────────────
+    # ── 载入一个包 ──────────────────────────────
     def load_file(self, path: str):
-        meta = read_deb_meta(path)
+        meta = read_pkg_meta(path)
         if not meta.get("_valid"):
-            self.toast.add_toast(Adw.Toast.new("这不像一个合法的 .deb"))
+            fmt = pkg_format(path)
+            self.toast.add_toast(
+                Adw.Toast.new(f"这不像一个合法的 .{fmt} 包" if fmt else "不认识的包格式")
+            )
             return
         self.current_meta = meta
         self._render_package(meta)
 
-        # 后台跑 deb2local --json 拿 AUR 对照和缺依赖
+        # 后台跑 pkg2local --json 拿 Arch 生态对照和缺依赖
         self._spawn(
-            [DEB2LOCAL, path, "--json"],
+            [BACKEND, path, "--json"],
             self._on_deps_json,
         )
 
@@ -305,6 +340,7 @@ class Window(Adw.ApplicationWindow):
 
         sub = Gtk.Label(
             label=f"版本 {meta.get('Version','?')}  ·  {meta.get('Architecture','?')}"
+                  f"  ·  {(meta.get('_format') or '?').upper()}"
                   f"  ·  {human_size(meta.get('_size', 0))}"
         )
         sub.add_css_class("dim-label")
@@ -381,7 +417,7 @@ class Window(Adw.ApplicationWindow):
         try:
             data = json.loads(out.strip().splitlines()[-1])
         except (json.JSONDecodeError, IndexError):
-            self._add_banner("检查失败", "无法解析 deb2local 输出", C_RED)
+            self._add_banner("检查失败", "无法解析 pkg2local 的输出", C_RED)
             return
         alt = data.get("arch_equivalent") or ""
         missing = data.get("missing_deps") or []
@@ -398,7 +434,7 @@ class Window(Adw.ApplicationWindow):
             if self.install_btn:
                 self.install_btn.remove_css_class("suggested-action")
                 self.install_btn.add_css_class("pill")
-                self.install_btn.set_label("仍要安装 deb（不推荐）")
+                self.install_btn.set_label("仍要安装这个包（不推荐）")
             copy = Gtk.Button(label=f"复制  paru -S {alt.split('/')[-1]}")
             copy.add_css_class("pill")
             copy.add_css_class("suggested-action")
@@ -423,7 +459,7 @@ class Window(Adw.ApplicationWindow):
         elif unknown:
             self._add_banner(
                 f"{len(unknown)} 项依赖没收录映射",
-                "这些 deb 依赖名我不认识，装完可能缺库：\n"
+                "这些依赖名没有收录映射，装完可能缺库：\n"
                 + ", ".join(unknown)
                 + "\n\n不确定的话，装完点「已安装」页的 ▶ 试跑一次，"
                   "再用 ldd 查缺什么。",
@@ -481,7 +517,7 @@ class Window(Adw.ApplicationWindow):
         self.install_btn.set_label("安装中…")
 
         path = self.current_meta["_file"]
-        self._spawn([DEB2LOCAL, path, "-y"], self._on_install_done, capture_all=True)
+        self._spawn([BACKEND, path, "-y"], self._on_install_done, capture_all=True)
 
     def _on_install_done(self, code: int, out: str, err: str):
         self.busy = False
@@ -555,13 +591,13 @@ class Window(Adw.ApplicationWindow):
         if not items:
             sp = Adw.StatusPage()
             sp.set_icon_name("package-x-generic-symbolic")
-            sp.set_title("还没装过 deb")
+            sp.set_title("还没装过包")
             sp.set_description("装过的包会出现在这里，每个都能一键卸载。")
             self.inst_box.append(sp)
             return
 
         group = Adw.PreferencesGroup()
-        group.set_title(f"通过 deb 装的应用（{len(items)}）")
+        group.set_title(f"通过 pkg2local 装的应用（{len(items)}）")
         group.set_description("这些都在 ~/.local 下，不占 pacman 数据库")
 
         for m in items:
@@ -623,7 +659,7 @@ class Window(Adw.ApplicationWindow):
             if resp != "ok":
                 return
             r = subprocess.run(
-                [DEB2LOCAL, "--uninstall", pkg],
+                [BACKEND, "--uninstall", pkg],
                 capture_output=True, text=True, timeout=60,
             )
             if r.returncode == 0:
@@ -688,32 +724,36 @@ class App(Adw.Application):
         )
         w = Window(self)
         w.present()
-        shot_path = os.environ.get("DEB_INSTALLER_SHOT")
+        shot_path = os.environ.get("PKG_INSTALLER_SHOT") or os.environ.get("DEB_INSTALLER_SHOT")
         # 命令行带文件路径则直接载入（必须在装定时器之前，autoinstall 才能看到）
         for a in sys.argv[1:]:
-            if a.lower().endswith(".deb") and os.path.isfile(a):
+            if pkg_format(a) and os.path.isfile(a):
                 w.load_file(a)
                 break
 
-        tab = os.environ.get("DEB_INSTALLER_TAB")
+        tab = os.environ.get("PKG_INSTALLER_TAB") or os.environ.get("DEB_INSTALLER_TAB")
         if tab:
             GLib.timeout_add(1200, lambda: (w.stack.set_visible_child_name(tab), False)[1])
-        if os.environ.get("DEB_INSTALLER_AUTOINSTALL") and w.current_meta:
+        auto = os.environ.get("PKG_INSTALLER_AUTOINSTALL") or os.environ.get("DEB_INSTALLER_AUTOINSTALL")
+        if auto and w.current_meta:
             GLib.timeout_add(6000, lambda: (w.do_install(), False)[1])
         if shot_path:
-            delay = int(os.environ.get("DEB_INSTALLER_SHOT_DELAY", "2200"))
+            delay = int(
+                os.environ.get("PKG_INSTALLER_SHOT_DELAY")
+                or os.environ.get("DEB_INSTALLER_SHOT_DELAY", "2200")
+            )
             GLib.timeout_add(delay, lambda: (self._grab(w, shot_path), False)[1])
 
 
 def main():
     if "--version" in sys.argv or "-V" in sys.argv:
-        print(f"deb-installer {VERSION}")
+        print(f"pkg-installer {VERSION}")
         return 0
-    if not os.path.isfile(DEB2LOCAL) or not os.access(DEB2LOCAL, os.X_OK):
+    if not os.path.isfile(BACKEND) or not os.access(BACKEND, os.X_OK):
         print(
-            f"找不到后端 deb2local（应在 {DEB2LOCAL}）。\n"
+            f"找不到后端 pkg2local（应在 {BACKEND}）。\n"
             "后端随仓库一起发布，重新跑一次 install.sh 即可：\n"
-            "  curl -fsSL https://raw.githubusercontent.com/Aceared0829/deb-installer/main/install.sh | bash",
+            "  curl -fsSL https://raw.githubusercontent.com/Aceared0829/pkg-installer/main/install.sh | bash",
             file=sys.stderr,
         )
         return 1

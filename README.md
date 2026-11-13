@@ -1,4 +1,4 @@
-# deb-installer
+# pkg-installer
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Arch_Linux-1793d1)](https://archlinux.org)
@@ -6,11 +6,11 @@
 
 <img src="docs/icon.png" width="96" align="right" alt="">
 
-**在 Arch 上双击安装 .deb 文件，免 root，不污染 pacman 数据库。**
+**在 Arch 上双击安装 `.deb` 和 `.rpm`，免 root，不污染 pacman 数据库。**
 
-很多软件只发 `.deb`。Arch 上你有 `dpkg`，但 `/var/lib/dpkg/status` 是空的——`sudo dpkg -i` 会解包成功然后装出一个跑不起来的东西。
+很多软件只发 `.deb` 或 `.rpm`。Arch 上你可能装了 `dpkg`，但 `/var/lib/dpkg/status` 是空的——`sudo dpkg -i` 会解包成功然后装出一个跑不起来的东西。rpm 更直接：Arch 根本不认它。
 
-这个工具换个思路：**不试图让 Arch 变成 Debian，而是把 .deb 里自包含的那部分解出来，装进你的家目录。**
+这个工具换个思路：**不试图让 Arch 变成 Debian 或 Fedora，而是把包里自包含的那部分解出来，装进你的家目录。**
 
 ![界面](docs/screenshots/02-aur-hit.png)
 
@@ -20,28 +20,32 @@
 
 **1. 先告诉你有没有更好的办法**
 
-拿到一个 `.deb`，它第一件事不是装，是去 `pacman` 官方库和 AUR 里搜同名包。搜到了就亮黄条：
+拿到一个包，它第一件事不是装，是去 `pacman` 官方库和 AUR 里搜同名包。搜到了就亮黄条：
 
 > AUR 已有：`aur/gearlever` —— 直接 `paru -S gearlever` 更省事，跟着系统一起升级，不用担心依赖漂移。
 
-旁边一个按钮，点了就把命令复制到剪贴板。**这是我最想要的行为**：绝大多数国产客户端在 AUR 或 Flathub 上都有，用原生的包意味着以后 `pacman -Syu` 就能升级，而不用回去重新下 deb。
+旁边一个按钮，点了就把命令复制到剪贴板。**这是我最想要的行为**：绝大多数国产客户端在 AUR 或 Flathub 上都有，用原生的包意味着以后 `pacman -Syu` 就能升级，而不用回去重新下载。
 
-**2. 把 deb 的依赖名翻译成 Arch 的**
+**2. 把包里的依赖名翻译成 Arch 的**
 
-`libwebkit2gtk-4.1-0` → `webkit2gtk-4.1`，`libayatana-appindicator3-1` → `libayatana-appindicator`……内置 88 条映射（覆盖 76 个 Arch 包）。
+两种格式的依赖写法完全不同，所以是两张表：
 
-缺什么就红条列出来，附一条可以直接粘的 `sudo pacman -S --needed ...`。不认识的名字单独归类（不假装「依赖齐全」）——因为我确实不认识它，那你也不该信我。
+- **deb** 写包名：`libwebkit2gtk-4.1-0` → `webkit2gtk-4.1`，`libayatana-appindicator3-1` → `libayatana-appindicator`
+- **rpm** 写 soname：`libgtk-3.so.0` → `gtk3`，`libqt6core.so.6` → `qt6-base`，还要先剥掉 `()(64bit)` 和 `(GLIBC_2.34)` 这类修饰
+
+内置 75 条 deb 映射 + 77 条 soname 映射。缺什么就红条列出来，附一条可以直接粘的 `sudo pacman -S --needed ...`。不认识的名字单独归类（不假装「依赖齐全」）——因为我确实不认识它，那你也不该信我。
 
 ![缺依赖](docs/screenshots/03-missing-deps.png)
 
 **3. 解包、链接、导入图标，全过程不要 root**
 
 ```
-.deb ──dpkg-deb -x──> ~/.local/opt/<包名>/
-                       ├── usr/bin/app          ← 程序本体
-                       ├── usr/share/applications/app.desktop
-                       └── usr/share/icons/...
-                              ↓
+.deb ──dpkg-deb -x──┐
+                    ├─> ~/.local/opt/<包名>/
+.rpm ──bsdtar -xf───┘   ├── usr/bin/app          ← 程序本体
+                        ├── usr/share/applications/app.desktop
+                        └── usr/share/icons/...
+                               ↓
       ~/.local/bin/app ──软链──┘
       ~/.local/share/applications/app.desktop  （Exec= 改成绝对路径）
 ```
@@ -54,27 +58,28 @@
 ## 装到你的机器上
 
 ```bash
-git clone https://github.com/Aceared0829/deb-installer.git
-cd deb-installer
+git clone https://github.com/Aceared0829/pkg-installer.git
+cd pkg-installer
 ./install.sh
 ```
 
 或者不 clone：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Aceared0829/deb-installer/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Aceared0829/pkg-installer/main/install.sh | bash
 ```
 
 装完：
 
 ```bash
-deb-installer                    # 打开界面
-deb-installer ~/下载/xxx.deb      # 直接载入
-deb2local ~/下载/xxx.deb          # 纯命令行，一样的逻辑
+pkg-installer                    # 打开界面
+pkg-installer ~/下载/xxx.deb      # 直接载入
+pkg2local ~/下载/xxx.deb          # 纯命令行，一样的逻辑
+pkg2local ~/下载/xxx.rpm          # rpm 一样
 xdg-open ~/下载/xxx.deb           # 等价于文件管理器里双击
 ```
 
-卸载本项目（不影响你用 deb 装的那些应用）：
+卸载本项目（不影响你用这个工具装的那些应用）：
 
 ```bash
 ./install.sh --uninstall
@@ -82,36 +87,63 @@ xdg-open ~/下载/xxx.deb           # 等价于文件管理器里双击
 
 ### 依赖
 
-`dpkg` `python-gobject` `gtk4` `libadwaita` —— 在 CachyOS 上全都已经是装好的。检查一下：
+| 用途 | 需要 |
+|---|---|
+| 解 `.deb` / 读 deb 包头 | `dpkg` |
+| 解 `.rpm` | `libarchive`（`bsdtar`） |
+| 读 rpm 包头 | `rpm-tools` **或** `python3`（内置解析器，二选一） |
+| 图形界面 | `python-gobject` `gtk4` `libadwaita` |
+
+在 CachyOS 上除了 `rpm-tools` 其他都已经是装好的。检查一下：
 
 ```bash
-pacman -Q dpkg python-gobject gtk4 libadwaita
+pacman -Q dpkg libarchive python-gobject gtk4 libadwaita
 ```
 
 ## 命令行
 
-后端 `deb2local` 是个独立的 bash 脚本，图形界面只是它的壳。你可以完全不用 GUI：
+后端 `pkg2local` 是个独立的 bash 脚本，图形界面只是它的壳。你可以完全不用 GUI：
 
 ```bash
-deb2local 包.deb            # 安装
-deb2local 包.deb -y         # 安装，不询问
-deb2local 包.deb --deps     # 只检查依赖，不装
-deb2local 包.deb --json     # 机器可读输出，给脚本/前端用
-deb2local --uninstall 名    # 卸载
+pkg2local 包.deb            # 安装
+pkg2local 包.rpm            # 同上
+pkg2local 包 -y             # 安装，不询问
+pkg2local 包 --deps         # 只检查依赖，不装
+pkg2local 包 --meta         # 只输出包头 JSON（不联网、不查依赖）
+pkg2local 包 --json         # 完整检查结果，机器可读，给脚本/前端用
+pkg2local --uninstall 名    # 卸载
+pkg2local --version         # 版本
 ```
 
-`--json` 输出长这样，`deb-installer` 就是靠它工作的：
+`--json` 输出长这样，`pkg-installer` 就是靠它工作的：
 
 ```json
 {
   "package": "clash-verge-rev",
   "version": "2.5.0",
   "arch": "amd64",
+  "format": "deb",
+  "file": "/home/me/下载/Clash.Verge_2.5.0_amd64.deb",
+  "depends_declared": "libwebkit2gtk-4.1-0, libgtk-3-0",
   "arch_equivalent": "aur/clash-verge-rev-bin",
   "unknown_deps": [],
   "missing_deps": ["webkit2gtk-4.1"]
 }
 ```
+
+`format` 是 `deb` 或 `rpm`，由文件头 magic 判断（`ed ab ee db` 是 rpm），所以扩展名写错也能认出来。
+
+## RPM 是怎么处理的
+
+不需要 `rpm`、`rpm2cpio`、`rpmbuild`，也不需要 root：
+
+- **解包**：首选 `bsdtar -xf`（libarchive 直接吃 RPM 的 cpio + zstd/xz payload）。bsdtar 拒收时退回内置的 python 解包器：自己切出 payload、按 magic 认 xz/zstd/gzip/bzip2 并解压、再按 cpio newc 逐条恢复文件和权限
+- **读包头**：优先 `rpm -qp --qf`；没有 `rpm-tools` 时用内置的 python3 解析器读头部索引（tag 1000=NAME、1001=VERSION、1002=RELEASE、1022=ARCH、1049=REQUIRENAME）
+- **判依赖**：soname 用 `ldconfig -p` 查系统缓存（输出预先读进关联数组，不走 `grep` 管道），缺了才翻 soname→包名映射表；`rpmlib(...)` 和 `rtld(...)` 是 rpm 自身机制，直接跳过；`/bin/sh` 这类文件依赖查文件是否存在
+
+**名字带渠道后缀也能认出来。** 厂商 rpm 常叫 `google-chrome-stable`、`code-insiders`、`microsoft-edge-beta`，而 AUR 里的包名是 `google-chrome`、`code`、`microsoft-edge`。查同名包时会依次剥掉 `-stable`/`-beta`/`-dev`/`-canary`/`-bin` 这类发行渠道后缀（`-desktop` 这类属于正式包名的不剥），所以装 Chrome 的 rpm 时它会直接告诉你「AUR 已有 google-chrome」。
+
+一个真实的坑：CentOS 的 `tar-1.34` 装上后 `ldd` 会报缺 `libselinux.so.1`——因为 CachyOS/AUR 里确实没有 `libselinux` 这个包。这是**真实的依赖缺口**，不是工具 bug，工具照实报出来。
 
 ## 同名命令冲突：会备份，不会覆盖
 
@@ -132,9 +164,10 @@ ln -sfn ~/.local/opt/新包/usr/bin/foo  ~/.local/bin/foo
 
 | 限制 | 说明 |
 |---|---|
-| 只处理 `.deb` | rpm / AppImage / snap 都不认。AppImage 用 [Gearlever](https://github.com/mijorus/gearlever)，rpm 用 `rpmextract` |
+| 不处理 AppImage / snap | AppImage 用 [Gearlever](https://github.com/mijorus/gearlever)，snap 在 Arch 上本来就别扭 |
 | 不自动装系统依赖 | 只告诉缺什么，不替你 `pacman -S`。装系统包应该你确认 |
 | 硬编码 `/usr` 的程序会崩 | 部分 Electron 应用和带服务/内核模块的包。日志里会提示改用 distrobox |
+| rpm 的脚本不执行 | `%post` / `%preun` 之类全部跳过——没有 rpm 数据库，跑了也不知道会发生什么 |
 | 卸载不清 `~/.config` | 配置留着，和 pacman 行为一致 |
 | 只支持 Arch 系 | 需要 `pacman`。Debian/Ubuntu 上你本来就用 `apt`，不需要这个 |
 
@@ -143,24 +176,25 @@ ln -sfn ~/.local/opt/新包/usr/bin/foo  ~/.local/bin/foo
 | 工具 | 为什么我没用 |
 |---|---|
 | `dpkg -i` | Arch 上没有 dpkg 数据库，依赖全部不认识 |
-| `debtap` | 把 deb 转成 `.pkg.tar.zst` 再 `pacman -U`。要 root，装进系统，升级时和 pacman 打架 |
-| `alien` | 同上的老方案，转换质量更差 |
-| `distrobox` | 重量级（一个完整 Ubuntu 容器），适合真的需要一个 Debian 用户空间的时候。对一个自包含的 Electron 应用来说是杀鸡用牛刀 |
-| `bauh` | 图形化的多后端管理器，但它的 deb 支持也是走 `dpkg`，踩同一个坑 |
+| `debtap` | 把 deb 转成 `.pkg.tar.zst` 再 `pacman -U`。要 root，装进系统，升级时和 pacman 打架；也只做 deb |
+| `alien` | 同上的老方案，转换质量更差，而且要在两个发行版的包格式之间来回转 |
+| `rpm2cpio` + `rpmextract` | 只解包，不查依赖、不建软链、不导入桌面图标，等于给你个 tarball |
+| `distrobox` | 重量级（一个完整容器），适合真的需要一个别的发行版用户空间的时候。对一个自包含的 Electron 应用来说是杀鸡用牛刀 |
+| `bauh` | 图形化的多后端管理器，但它的 deb/rpm 支持也是走 `dpkg`/`rpm` 本体，踩同一个坑 |
 
-这个工具的定位是**第四种**：假装 deb 是一个自解压的 tarball，装进用户目录。它不解决所有情况，但解决了最常见的那种——「官方只发 deb，我要用它，但我不想为它装一整个 Debian」。
+这个工具的定位是**第四种**：假装包是一个自解压的 tarball，装进用户目录。它不解决所有情况，但解决了最常见的那种——「官方只发 deb 或 rpm，我要用它，但我不想为它装一整个 Debian」。
 
 ## 项目结构
 
 ```
-bin/deb2local       后端（bash，398 行），所有实际逻辑在这里
-bin/deb-installer   图形前端（Python + GTK4 + libadwaita，727 行）
+bin/pkg2local       后端（bash，934 行），所有实际逻辑在这里
+bin/pkg-installer   图形前端（Python + GTK4 + libadwaita，767 行）
 desktop/            桌面条目模板和应用图标
 docs/screenshots/   真机截图，非设计稿
 install.sh          安装 / 卸载
 ```
 
-前端和后端是**严格的调用关系**，不是两份实现：GUI 里的每个动作都是 `subprocess` 调 `deb2local`，所以两者行为不可能漂移。
+前端和后端是**严格的调用关系**，不是两份实现：GUI 里的每个动作都是 `subprocess` 调 `pkg2local`，连读包头都走它的 `--meta`，所以两者行为不可能漂移。
 
 ---
 
@@ -168,26 +202,30 @@ install.sh          安装 / 卸载
 
 # English
 
-**Double-click to install `.deb` files on Arch Linux — no root, no pollution of the pacman database.**
+**Double-click to install `.deb` and `.rpm` packages on Arch Linux — no root, no pollution of the pacman database.**
 
-Plenty of software ships only a `.deb`. Arch has `dpkg`, but its status database is empty, so `sudo dpkg -i` unpacks the files and then leaves you with a program that can't find its dependencies.
+Plenty of software ships only a `.deb` or `.rpm`. Arch may have `dpkg` installed, but its status database is empty, so `sudo dpkg -i` unpacks the files and then leaves you with a program that can't find its dependencies. RPM isn't even recognised.
 
-This tool takes a different angle: **instead of turning Arch into Debian, it extracts the self-contained part of a `.deb` and installs it into your home directory.**
+This tool takes a different angle: **instead of turning Arch into Debian or Fedora, it extracts the self-contained part of a package and installs it into your home directory.**
 
 ### What it does
 
-1. **Checks for a native package first.** Before installing anything, it searches the official repos and the AUR. If there's a match, it says so and offers a one-click copy of `paru -S <pkg>`. Native packages upgrade with `pacman -Syu`; a sideloaded `.deb` doesn't.
-2. **Translates Debian dependency names to Arch ones.** 88 Debian-to-Arch mappings built in (`libwebkit2gtk-4.1-0` → `webkit2gtk-4.1`, etc.). Missing packages are listed with a ready-to-paste `pacman` command. Unrecognized names are reported separately rather than being counted as satisfied.
+1. **Checks for a native package first.** Before installing anything, it searches the official repos and the AUR. If there's a match, it says so and offers a one-click copy of `paru -S <pkg>`. Native packages upgrade with `pacman -Syu`; a sideloaded one doesn't.
+2. **Translates foreign dependency names to Arch ones.** Debian writes package names (`libwebkit2gtk-4.1-0` → `webkit2gtk-4.1`); RPM writes sonames (`libgtk-3.so.0` → `gtk3`), which first need their `()(64bit)` and `(GLIBC_2.34)` decorations stripped. 168 Debian-name mappings, 103 soname mappings and 17 RPM capability-name mappings are built in. Missing packages are listed with a ready-to-paste `pacman` command. Unrecognized names are reported separately rather than being counted as satisfied.
 3. **Unpacks, links, imports icons — entirely without root.** Files go to `~/.local/opt/<pkg>/`, a symlink into `~/.local/bin/`, a desktop entry with `Exec=` rewritten to an absolute path. Uninstalling removes those and nothing else.
 
 ### Install
 
 ```bash
-git clone https://github.com/Aceared0829/deb-installer.git
-cd deb-installer && ./install.sh
+git clone https://github.com/Aceared0829/pkg-installer.git
+cd pkg-installer && ./install.sh
 ```
 
-Requires `dpkg`, `python-gobject`, `gtk4`, `libadwaita` — all present by default on CachyOS/EndeavourOS.
+Requires `dpkg` (for `.deb`), `libarchive` (for `.rpm`), `rpm-tools` or `python3` (for rpm headers), plus `python-gobject`, `gtk4`, `libadwaita` for the GUI.
+
+### RPM without rpm
+
+No `rpm`, `rpm2cpio`, `rpmbuild`, or root required. `bsdtar` handles the cpio + zstd payload; headers come from `rpm -qp --qf` when available, otherwise from a built-in python3 parser over the header index. Dependencies are resolved through `ldconfig -p` and a soname→package table; `rpmlib(...)` and `rtld(...)` are skipped as rpm-internal. `%post`/`%preun` scripts are deliberately not executed.
 
 ### Never overwrites your files
 
@@ -195,7 +233,7 @@ If `~/.local/bin/foo` already exists and wasn't created by this tool, it gets re
 
 ### Limitations
 
-`.deb` only. Doesn't install system dependencies for you (it tells you what's missing). Programs that hardcode `/usr` paths, or ship systemd units or kernel modules, will not work — use [distrobox](https://github.com/89luca89/distrobox) for those. Arch-family only.
+`.deb` and `.rpm` only. Doesn't install system dependencies for you (it tells you what's missing). Programs that hardcode `/usr` paths, or ship systemd units or kernel modules, will not work — use [distrobox](https://github.com/89luca89/distrobox) for those. Arch-family only.
 
 ## License
 

@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# install.sh — 把 deb-installer + deb2local 装进 ~/.local
+# install.sh — 把 pkg-installer + pkg2local 装进 ~/.local
 #
 #   ./install.sh              从本地仓库安装（可重复执行，覆盖升级）
 #   ./install.sh --uninstall  卸载
 #
 # 也支持不 clone 直接跑：
-#   curl -fsSL https://raw.githubusercontent.com/Aceared0829/deb-installer/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/Aceared0829/pkg-installer/main/install.sh | bash
 #
 set -euo pipefail
 
-REPO_RAW="${REPO_RAW:-https://raw.githubusercontent.com/Aceared0829/deb-installer/main}"
+REPO_RAW="${REPO_RAW:-https://raw.githubusercontent.com/Aceared0829/pkg-installer/main}"
 PREFIX="${PREFIX:-$HOME/.local}"
 BIN="$PREFIX/bin"
 APPS="$PREFIX/share/applications"
@@ -23,13 +23,18 @@ die()  { printf '%s错误:%s %s\n' "$c_red" "$c_off" "$*" >&2; exit 1; }
 
 # ─────────────── 卸载 ───────────────
 if [[ "${1:-}" == "--uninstall" ]]; then
-  rm -f "$BIN/deb-installer" "$BIN/deb2local"
-  rm -f "$APPS/deb-installer.desktop"
-  rm -f "$ICONS/scalable/apps/deb-installer.svg"
-  rm -f "$ICONS/128x128/apps/deb-installer.png"
-  rm -f "$ICONS/256x256/apps/deb-installer.png"
+  rm -f "$BIN/pkg-installer" "$BIN/pkg2local"
+  rm -f "$APPS/pkg-installer.desktop"
+  rm -f "$ICONS/scalable/apps/pkg-installer.svg"
+  rm -f "$ICONS/128x128/apps/pkg-installer.png"
+  rm -f "$ICONS/256x256/apps/pkg-installer.png"
+  # 1.x 时代的旧名字，顺手清掉，避免留下两个入口
+  rm -f "$BIN/deb-installer" "$BIN/deb2local" "$APPS/deb-installer.desktop"
+  rm -f "$ICONS/scalable/apps/deb-installer.svg" \
+        "$ICONS/128x128/apps/deb-installer.png" \
+        "$ICONS/256x256/apps/deb-installer.png"
   command -v update-desktop-database >/dev/null && update-desktop-database "$APPS" 2>/dev/null || true
-  ok "已卸载（用 deb 装的应用留在 ~/.local/opt，需要的话手动删）"
+  ok "已卸载（用这个工具装的应用留在 ~/.local/opt，需要的话手动删）"
   exit 0
 fi
 
@@ -41,7 +46,7 @@ resolve_src() {
   if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
     self_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
   fi
-  if [[ -n "$self_dir" && -f "$self_dir/bin/deb2local" && -f "$self_dir/bin/deb-installer" ]]; then
+  if [[ -n "$self_dir" && -f "$self_dir/bin/pkg2local" && -f "$self_dir/bin/pkg-installer" ]]; then
     SRC_DIR="$self_dir"
     echo "从本地仓库安装：$SRC_DIR"
     return
@@ -53,7 +58,7 @@ resolve_src() {
   CLEANUP="$tmp"
   trap 'rm -rf "$CLEANUP"' EXIT
   local f
-  for f in bin/deb2local bin/deb-installer desktop/deb-installer.desktop desktop/deb-installer.svg; do
+  for f in bin/pkg2local bin/pkg-installer desktop/pkg-installer.desktop desktop/pkg-installer.svg; do
     mkdir -p "$tmp/$(dirname "$f")"
     curl -fsSL "$REPO_RAW/$f" -o "$tmp/$f" \
       || die "下载失败：$REPO_RAW/$f"
@@ -65,7 +70,12 @@ resolve_src
 # ─────────────── 依赖检查 ───────────────
 echo "检查依赖..."
 missing=()
-command -v dpkg-deb >/dev/null || missing+=("dpkg")
+command -v bsdtar >/dev/null || missing+=("libarchive")     # 解 .rpm
+
+# 读 .deb 包头要 dpkg-deb；读 .rpm 包头要 rpm-tools 或 python3（内置解析器）
+if ! command -v dpkg-deb >/dev/null && ! command -v bsdtar >/dev/null; then
+  missing+=("dpkg")
+fi
 
 have_gi=0
 if command -v python3 >/dev/null; then
@@ -81,10 +91,10 @@ fi
 if [[ ${#missing[@]} -gt 0 ]]; then
   if command -v pacman >/dev/null; then
     die "缺这些包，先补上：
-  sudo pacman -S --needed dpkg python-gobject gtk4 libadwaita"
+  sudo pacman -S --needed dpkg libarchive python-gobject gtk4 libadwaita"
   else
     die "缺这些：${missing[*]}
-本项目只支持 Arch 系（需要 pacman + dpkg-deb）。"
+本项目只支持 Arch 系（需要 pacman + dpkg-deb / bsdtar）。"
   fi
 fi
 ok "依赖齐全"
@@ -92,41 +102,43 @@ ok "依赖齐全"
 # ─────────────── 安装 ───────────────
 mkdir -p "$BIN" "$APPS" "$ICONS/scalable/apps"
 
-install -m 755 "$SRC_DIR/bin/deb2local"     "$BIN/deb2local"
-install -m 755 "$SRC_DIR/bin/deb-installer" "$BIN/deb-installer"
-ok "$BIN/deb2local"
-ok "$BIN/deb-installer"
+install -m 755 "$SRC_DIR/bin/pkg2local"     "$BIN/pkg2local"
+install -m 755 "$SRC_DIR/bin/pkg-installer" "$BIN/pkg-installer"
+ok "$BIN/pkg2local"
+ok "$BIN/pkg-installer"
 
 # 桌面条目：把 @EXEC@ / @ICON@ 换成真实值
-sed -e "s|@EXEC@|$BIN/deb-installer|g" \
-    -e "s|@ICON@|deb-installer|g" \
-    "$SRC_DIR/desktop/deb-installer.desktop" > "$APPS/deb-installer.desktop"
-chmod 644 "$APPS/deb-installer.desktop"
-ok "$APPS/deb-installer.desktop"
+sed -e "s|@EXEC@|$BIN/pkg-installer|g" \
+    -e "s|@ICON@|pkg-installer|g" \
+    "$SRC_DIR/desktop/pkg-installer.desktop" > "$APPS/pkg-installer.desktop"
+chmod 644 "$APPS/pkg-installer.desktop"
+ok "$APPS/pkg-installer.desktop"
 
-install -m 644 "$SRC_DIR/desktop/deb-installer.svg" "$ICONS/scalable/apps/deb-installer.svg"
+install -m 644 "$SRC_DIR/desktop/pkg-installer.svg" "$ICONS/scalable/apps/pkg-installer.svg"
 # 有些面板（COSMIC 等）只认位图
 if command -v rsvg-convert >/dev/null; then
   mkdir -p "$ICONS/128x128/apps" "$ICONS/256x256/apps"
-  rsvg-convert -w 128 -h 128 "$SRC_DIR/desktop/deb-installer.svg" -o "$ICONS/128x128/apps/deb-installer.png"
-  rsvg-convert -w 256 -h 256 "$SRC_DIR/desktop/deb-installer.svg" -o "$ICONS/256x256/apps/deb-installer.png"
+  rsvg-convert -w 128 -h 128 "$SRC_DIR/desktop/pkg-installer.svg" -o "$ICONS/128x128/apps/pkg-installer.png"
+  rsvg-convert -w 256 -h 256 "$SRC_DIR/desktop/pkg-installer.svg" -o "$ICONS/256x256/apps/pkg-installer.png"
 fi
-ok "$ICONS/scalable/apps/deb-installer.svg"
+ok "$ICONS/scalable/apps/pkg-installer.svg"
 
 command -v update-desktop-database >/dev/null && update-desktop-database "$APPS" 2>/dev/null || true
 command -v gtk-update-icon-cache    >/dev/null && gtk-update-icon-cache -q -t -f "$ICONS" 2>/dev/null || true
 
-# 把 .deb 文件关联到这个程序
+# 把 .deb / .rpm 文件关联到这个程序
 if command -v xdg-mime >/dev/null; then
-  xdg-mime default deb-installer.desktop application/vnd.debian.binary-package 2>/dev/null || true
-  xdg-mime default deb-installer.desktop application/x-deb 2>/dev/null || true
+  for m in application/vnd.debian.binary-package application/x-deb \
+           application/x-rpm application/x-redhat-package-manager; do
+    xdg-mime default pkg-installer.desktop "$m" 2>/dev/null || true
+  done
 fi
 
 echo
 ok "装好了"
-echo "  打开界面:  deb-installer"
-echo "  命令行:    deb2local 包.deb"
-echo "  双击 .deb 也会打开这个界面"
+echo "  打开界面:  pkg-installer"
+echo "  命令行:    pkg2local 包.deb     （.rpm 一样）"
+echo "  双击 .deb / .rpm 也会打开这个界面"
 echo
 case ":$PATH:" in
   *":$BIN:"*) ;;

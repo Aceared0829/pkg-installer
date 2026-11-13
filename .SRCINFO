@@ -1,0 +1,19 @@
+pkgbase = pkg-installer
+	pkgdesc = Install .deb and .rpm packages on Arch Linux without root, into your home directory
+	pkgver = 2.0.0
+	pkgrel = 1
+	url = https://github.com/Aceared0829/pkg-installer
+	arch = any
+	license = MIT
+	makedepends = git
+	depends = bash
+	depends = libarchive
+	depends = python-gobject
+	depends = gtk4
+	depends = libadwaita
+	optdepends = dpkg: read .deb headers (falls back to bsdtar)
+	optdepends = rpm-tools: read .rpm headers (falls back to the built-in python parser)
+	source = pkg-installer-2.0.0.tar.gz::https://github.com/Aceared0829/pkg-installer/archive/v2.0.0.tar.gz
+	sha256sums = SKIP
+
+pkgname = pkg-installer
