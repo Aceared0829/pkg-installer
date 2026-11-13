@@ -1,19 +1,22 @@
 #!/usr/bin/env bash
 # install.sh — 把 deb-installer + deb2local 装进 ~/.local
 #
-#   ./install.sh              安装（可重复执行，覆盖升级）
+#   ./install.sh              从本地仓库安装（可重复执行，覆盖升级）
 #   ./install.sh --uninstall  卸载
+#
+# 也支持不 clone 直接跑：
+#   curl -fsSL https://raw.githubusercontent.com/Aceared0829/deb-installer/main/install.sh | bash
 #
 set -euo pipefail
 
-SRC_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+REPO_RAW="${REPO_RAW:-https://raw.githubusercontent.com/Aceared0829/deb-installer/main}"
 PREFIX="${PREFIX:-$HOME/.local}"
 BIN="$PREFIX/bin"
 APPS="$PREFIX/share/applications"
 ICONS="$PREFIX/share/icons/hicolor"
 
 c_red=$'\033[31m'; c_grn=$'\033[32m'; c_yel=$'\033[33m'; c_off=$'\033[0m'
-[[ -n "${NO_COLOR:-}" || ! -t 1 ]] && c_red=""; c_grn=""; c_yel=""; c_off=""
+if [[ -n "${NO_COLOR:-}" || ! -t 1 ]]; then c_red=""; c_grn=""; c_yel=""; c_off=""; fi
 ok()   { printf '%s✓%s %s\n' "$c_grn" "$c_off" "$*"; }
 warn() { printf '%s!%s %s\n' "$c_yel" "$c_off" "$*"; }
 die()  { printf '%s错误:%s %s\n' "$c_red" "$c_off" "$*" >&2; exit 1; }
@@ -22,19 +25,47 @@ die()  { printf '%s错误:%s %s\n' "$c_red" "$c_off" "$*" >&2; exit 1; }
 if [[ "${1:-}" == "--uninstall" ]]; then
   rm -f "$BIN/deb-installer" "$BIN/deb2local"
   rm -f "$APPS/deb-installer.desktop"
-  rm -f "$ICONS"/scalable/apps/deb-installer.svg
-  rm -f "$ICONS"/128x128/apps/deb-installer.png
-  rm -f "$ICONS"/256x256/apps/deb-installer.png
+  rm -f "$ICONS/scalable/apps/deb-installer.svg"
+  rm -f "$ICONS/128x128/apps/deb-installer.png"
+  rm -f "$ICONS/256x256/apps/deb-installer.png"
   command -v update-desktop-database >/dev/null && update-desktop-database "$APPS" 2>/dev/null || true
   ok "已卸载（用 deb 装的应用留在 ~/.local/opt，需要的话手动删）"
   exit 0
 fi
 
+# ─────────────── 拿到源码 ───────────────
+# 本地仓库模式：install.sh 旁边就是 bin/；管道模式：临时下载到一个工作目录
+CLEANUP=""
+resolve_src() {
+  local self_dir=""
+  if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
+    self_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  fi
+  if [[ -n "$self_dir" && -f "$self_dir/bin/deb2local" && -f "$self_dir/bin/deb-installer" ]]; then
+    SRC_DIR="$self_dir"
+    echo "从本地仓库安装：$SRC_DIR"
+    return
+  fi
+
+  echo "从 GitHub 下载：$REPO_RAW"
+  local tmp
+  tmp=$(mktemp -d)
+  CLEANUP="$tmp"
+  trap 'rm -rf "$CLEANUP"' EXIT
+  local f
+  for f in bin/deb2local bin/deb-installer desktop/deb-installer.desktop desktop/deb-installer.svg; do
+    mkdir -p "$tmp/$(dirname "$f")"
+    curl -fsSL "$REPO_RAW/$f" -o "$tmp/$f" \
+      || die "下载失败：$REPO_RAW/$f"
+  done
+  SRC_DIR="$tmp"
+}
+resolve_src
+
 # ─────────────── 依赖检查 ───────────────
 echo "检查依赖..."
 missing=()
 command -v dpkg-deb >/dev/null || missing+=("dpkg")
-command -v pacman   >/dev/null || missing+=("pacman")
 
 have_gi=0
 if command -v python3 >/dev/null; then
@@ -59,15 +90,14 @@ fi
 ok "依赖齐全"
 
 # ─────────────── 安装 ───────────────
-mkdir -p "$BIN" "$APPS" \
-  "$ICONS/scalable/apps" "$ICONS/128x128/apps" "$ICONS/256x256/apps"
+mkdir -p "$BIN" "$APPS" "$ICONS/scalable/apps"
 
 install -m 755 "$SRC_DIR/bin/deb2local"     "$BIN/deb2local"
 install -m 755 "$SRC_DIR/bin/deb-installer" "$BIN/deb-installer"
 ok "$BIN/deb2local"
 ok "$BIN/deb-installer"
 
-# 桌面条目：把 @EXEC@ / @ICON@ 换成真实路径
+# 桌面条目：把 @EXEC@ / @ICON@ 换成真实值
 sed -e "s|@EXEC@|$BIN/deb-installer|g" \
     -e "s|@ICON@|deb-installer|g" \
     "$SRC_DIR/desktop/deb-installer.desktop" > "$APPS/deb-installer.desktop"
@@ -77,6 +107,7 @@ ok "$APPS/deb-installer.desktop"
 install -m 644 "$SRC_DIR/desktop/deb-installer.svg" "$ICONS/scalable/apps/deb-installer.svg"
 # 有些面板（COSMIC 等）只认位图
 if command -v rsvg-convert >/dev/null; then
+  mkdir -p "$ICONS/128x128/apps" "$ICONS/256x256/apps"
   rsvg-convert -w 128 -h 128 "$SRC_DIR/desktop/deb-installer.svg" -o "$ICONS/128x128/apps/deb-installer.png"
   rsvg-convert -w 256 -h 256 "$SRC_DIR/desktop/deb-installer.svg" -o "$ICONS/256x256/apps/deb-installer.png"
 fi
@@ -97,5 +128,8 @@ echo "  打开界面:  deb-installer"
 echo "  命令行:    deb2local 包.deb"
 echo "  双击 .deb 也会打开这个界面"
 echo
-echo "  PATH 里有 ~/.local/bin 吗？没有的话加一行到 ~/.bashrc："
-echo "    export PATH=\"\$HOME/.local/bin:\$PATH\""
+case ":$PATH:" in
+  *":$BIN:"*) ;;
+  *) echo "  PATH 里没有 $BIN，加一行到 ~/.bashrc："
+     echo "    export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
+esac
