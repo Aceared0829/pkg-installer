@@ -57,6 +57,16 @@
 
 ## 装到你的机器上
 
+**装成系统包**（推荐，能和 `pacman -Syu` 一起升级）：
+
+```bash
+git clone https://github.com/Aceared0829/pkg-installer.git
+cd pkg-installer
+makepkg -si
+```
+
+**装进 `~/.local`，不用 root**：
+
 ```bash
 git clone https://github.com/Aceared0829/pkg-installer.git
 cd pkg-installer
@@ -89,8 +99,8 @@ xdg-open ~/下载/xxx.deb           # 等价于文件管理器里双击
 
 | 用途 | 需要 |
 |---|---|
-| 解 `.deb` / 读 deb 包头 | `dpkg` |
-| 解 `.rpm` | `libarchive`（`bsdtar`） |
+| 解 `.deb` / 读 deb 包头 | `dpkg` **或** `bsdtar`（libarchive） |
+| 解 `.rpm` | `libarchive`（`bsdtar`），不行就走内置 python 解包器 |
 | 读 rpm 包头 | `rpm-tools` **或** `python3`（内置解析器，二选一） |
 | 图形界面 | `python-gobject` `gtk4` `libadwaita` |
 
