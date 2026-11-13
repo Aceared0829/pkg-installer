@@ -56,6 +56,12 @@ EOF
 # ---------- deb 依赖名 → Arch 包名 ----------
 arch_name() {
   case "$1" in
+    # 这几条是几乎每个 deb 都声明的基础库。不映射的话，任何一个包都会
+    # 报「N 项没收录映射」，读者会以为真缺东西，其实是 glibc / libstdc++。
+    libc6|libc-bin)              echo glibc ;;
+    libgcc-s1|libstdc++6|libgomp1) echo gcc-libs ;;
+    zlib1g)                      echo zlib ;;
+    libcrypt1)                   echo libxcrypt ;;
     libadwaita-1-0)              echo libadwaita ;;
     libatspi2.0-0)               echo at-spi2-core ;;
     libepoxy0)                   echo libepoxy ;;

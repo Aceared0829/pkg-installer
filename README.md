@@ -35,7 +35,7 @@
 - **deb** 写包名：`libwebkit2gtk-4.1-0` → `webkit2gtk-4.1`，`libayatana-appindicator3-1` → `libayatana-appindicator`
 - **rpm** 写 soname：`libgtk-3.so.0` → `gtk3`，`libqt6core.so.6` → `qt6-base`，还要先剥掉 `()(64bit)` 和 `(GLIBC_2.34)` 这类修饰
 
-内置 169 条 deb 映射 + 102 条 soname 映射 + 18 条 rpm 能力名映射。缺什么就红条列出来，附一条可以直接粘的 `sudo pacman -S --needed ...`。不认识的名字单独归类（不假装「依赖齐全」）——因为我确实不认识它，那你也不该信我。
+内置 176 条 deb 映射 + 102 条 soname 映射 + 17 条 rpm 能力名映射。缺什么就红条列出来，附一条可以直接粘的 `sudo pacman -S --needed ...`。不认识的名字单独归类（不假装「依赖齐全」）——因为我确实不认识它，那你也不该信我。
 
 ![缺依赖](docs/screenshots/03-missing-deps.png)
 
@@ -258,8 +258,8 @@ ln -sfn ~/.local/opt/新包/usr/bin/foo  ~/.local/bin/foo
 ## 项目结构
 
 ```
-bin/pkg2local       后端（bash，1171 行），所有实际逻辑在这里
-bin/pkg-installer   图形前端（Python + GTK4 + libadwaita，807 行）
+bin/pkg2local       后端（bash，1177 行），所有实际逻辑在这里
+bin/pkg-installer   图形前端（Python + GTK4 + libadwaita，1173 行）
 desktop/            桌面条目模板和应用图标
 docs/screenshots/   真机截图，非设计稿
 install.sh          安装 / 卸载
@@ -284,7 +284,7 @@ This tool takes a different angle: **instead of turning Arch into Debian or Fedo
 ### What it does
 
 1. **Checks for a native package first.** Before installing anything, it searches the official repos and the AUR. If there's a match, it says so and offers a one-click copy of `paru -S <pkg>`. Native packages upgrade with `pacman -Syu`; a sideloaded one doesn't.
-2. **Translates foreign dependency names to Arch ones.** Debian writes package names (`libwebkit2gtk-4.1-0` → `webkit2gtk-4.1`); RPM writes sonames (`libgtk-3.so.0` → `gtk3`), which first need their `()(64bit)` and `(GLIBC_2.34)` decorations stripped. 168 Debian-name mappings, 103 soname mappings and 17 RPM capability-name mappings are built in. Missing packages are listed with a ready-to-paste `pacman` command. Unrecognized names are reported separately rather than being counted as satisfied.
+2. **Translates foreign dependency names to Arch ones.** Debian writes package names (`libwebkit2gtk-4.1-0` → `webkit2gtk-4.1`); RPM writes sonames (`libgtk-3.so.0` → `gtk3`), which first need their `()(64bit)` and `(GLIBC_2.34)` decorations stripped. 176 Debian-name mappings, 102 soname mappings and 17 RPM capability-name mappings are built in. Missing packages are listed with a ready-to-paste `pacman` command. Unrecognized names are reported separately rather than being counted as satisfied.
 3. **Unpacks, links, imports icons — entirely without root.** Files go to `~/.local/opt/<pkg>/`, a symlink into `~/.local/bin/`, a desktop entry with `Exec=` rewritten to an absolute path. Uninstalling removes those and nothing else.
 
 ### Install

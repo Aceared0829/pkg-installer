@@ -25,7 +25,7 @@ from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
 
 APP_ID = "io.github.aceared.pkginstaller"
 TITLE = "pkg 安装器"
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 
 # 认的包格式 → 显示名。新增格式只改这里 + 后端的 detect_format
 FORMATS = {
@@ -35,14 +35,35 @@ FORMATS = {
     ".flatpak": "flatpak",
     ".flatpakref": "flatpak",
 }
-DEFAULT_PICK = ("deb", "rpm", "appimage", "flatpak")
-# 界面上要展示的扩展名（顺序即过滤器里的顺序）
-DISPLAY_EXTS = (".deb", ".rpm", ".AppImage", ".flatpak")
+FORMAT_LABEL = {
+    "deb": "DEB",
+    "rpm": "RPM",
+    "appimage": "AppImage",
+    "flatpak": "Flatpak",
+}
+FORMAT_ICON = {
+    "appimage": "application-x-executable-symbolic",
+}
+TONE_ICON = {
+    "ok": "emblem-ok-symbolic",
+    "warn": "dialog-warning-symbolic",
+    "err": "dialog-error-symbolic",
+    "info": "dialog-information-symbolic",
+}
 
 
 def pkg_format(path: str) -> str:
     """按扩展名给格式；返回空串表示不认。"""
     return FORMATS.get(Path(path).suffix.lower(), "")
+
+
+def format_label(fmt: str) -> str:
+    key = (fmt or "").lower()
+    return FORMAT_LABEL.get(key, (fmt or "").upper())
+
+
+def format_icon(fmt: str) -> str:
+    return FORMAT_ICON.get((fmt or "").lower(), "package-x-generic-symbolic")
 
 
 def find_backend() -> str:
@@ -68,10 +89,72 @@ OPT_DIR = Path.home() / ".local/opt"
 BIN_DIR = Path.home() / ".local/bin"
 APPS_DIR = Path.home() / ".local/share/applications"
 
-C_GRN = "#26a269"
-C_YEL = "#e5a50a"
-C_RED = "#c01c28"
-C_DIM = "#8f8f8f"
+
+def brand_icon_path() -> str:
+    """开发树和安装后的图标都试一遍，找不到就让调用方退回符号图标。"""
+    here = Path(__file__).resolve().parent.parent
+    candidates = [
+        here / "docs" / "icon.png",
+        Path.home() / ".local/share/icons/hicolor/256x256/apps/pkg-installer.png",
+        Path("/usr/share/icons/hicolor/256x256/apps/pkg-installer.png"),
+        here / "desktop" / "pkg-installer.svg",
+        Path.home() / ".local/share/icons/hicolor/scalable/apps/pkg-installer.svg",
+        Path("/usr/share/icons/hicolor/scalable/apps/pkg-installer.svg"),
+    ]
+    for p in candidates:
+        if p.is_file():
+            return str(p)
+    return ""
+
+
+def brand_image(pixel: int) -> Gtk.Image:
+    img = Gtk.Image()
+    img.set_pixel_size(pixel)
+    path = brand_icon_path()
+    if path:
+        img.set_from_file(path)
+    else:
+        img.set_from_icon_name("package-x-generic-symbolic")
+    img.set_halign(Gtk.Align.CENTER)
+    return img
+
+
+def apply_brand_icon(page: Adw.StatusPage, fallback: str) -> None:
+    path = brand_icon_path()
+    if path:
+        try:
+            page.set_paintable(Gdk.Texture.new_from_filename(path))
+            return
+        except Exception:
+            pass
+    page.set_icon_name(fallback)
+
+
+def icon_well(icon_name: str, size: int = 40, *classes: str) -> Gtk.Box:
+    well = Gtk.Box()
+    for css in classes:
+        well.add_css_class(css)
+    well.set_size_request(size, size)
+    well.set_halign(Gtk.Align.CENTER)
+    well.set_valign(Gtk.Align.CENTER)
+    img = Gtk.Image.new_from_icon_name(icon_name)
+    img.set_pixel_size(max(16, int(size * 0.52)))
+    # 只居中，不扩张：icon 一旦 hexpand 就会把整行标题顶到右边
+    img.set_halign(Gtk.Align.CENTER)
+    img.set_valign(Gtk.Align.CENTER)
+    well.append(img)
+    return well
+
+
+def chip_label(text: str, accent: bool = False) -> Gtk.Label:
+    lbl = Gtk.Label(label=text)
+    lbl.add_css_class("chip")
+    if accent:
+        lbl.add_css_class("chip-accent")
+    lbl.set_halign(Gtk.Align.START)
+    lbl.set_ellipsize(3)
+    lbl.set_max_width_chars(42)
+    return lbl
 
 
 # ─────────────────────────── 元数据读取 ───────────────────────────
@@ -122,9 +205,14 @@ def human_size(n: int) -> str:
 def list_installed() -> list[dict]:
     """扫 ~/.local/opt/*/.pkg2local.json（兼容 1.x 留下的 .deb2local.json）"""
     items = []
-    if not OPT_DIR.is_dir():
+    root = OPT_DIR
+    # 截图/自测用，不改默认扫描位置
+    override = os.environ.get("PKG_INSTALLER_OPT_DIR")
+    if override:
+        root = Path(override)
+    if not root.is_dir():
         return items
-    for d in sorted(OPT_DIR.iterdir()):
+    for d in sorted(root.iterdir()):
         for name in (".pkg2local.json", ".deb2local.json"):
             meta = d / name
             if not meta.is_file():
@@ -141,39 +229,64 @@ def list_installed() -> list[dict]:
 
 # ─────────────────────────── 拖放区 ───────────────────────────
 class DropZone(Gtk.Box):
-    """空态时显示的虚线大框，提示拖入安装包"""
+    """空态时的投放区。拖入时改边框和标题，松开前就能看出来接不接。"""
 
     def __init__(self):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        self.add_css_class("card")
+        self.add_css_class("drop-zone")
         self.set_valign(Gtk.Align.CENTER)
-        self.set_margin_top(48)
-        self.set_margin_bottom(48)
-        self.set_margin_start(24)
-        self.set_margin_end(24)
+        self.set_vexpand(True)
+        self.set_margin_top(8)
+        self.set_margin_bottom(8)
+        self.set_margin_start(4)
+        self.set_margin_end(4)
 
-        icon = Gtk.Image.new_from_icon_name("package-x-generic-symbolic")
-        icon.set_pixel_size(96)
-        icon.add_css_class("dim-label")
-        self.append(icon)
+        self.append(brand_image(84))
 
-        t = Gtk.Label.new("把安装包拖进来")
-        t.add_css_class("title-1")
-        self.append(t)
+        self.title = Gtk.Label(label="把安装包拖进来")
+        self.title.add_css_class("title-1")
+        self.title.set_halign(Gtk.Align.CENTER)
+        self.append(self.title)
 
-        s = Gtk.Label.new(".deb / .rpm / .AppImage / .flatpak 都认\n也会先查 Arch 生态有没有现成的包，能直接用就不折腾它")
+        s = Gtk.Label(label="会先查 Arch 仓库和 AUR。有现成的包就直接用，不必折腾这个文件。")
         s.add_css_class("dim-label")
         s.set_wrap(True)
         s.set_justify(Gtk.Justification.CENTER)
+        s.set_halign(Gtk.Align.CENTER)
+        s.set_max_width_chars(34)
         self.append(s)
 
-        btn = Gtk.Button(label="选择文件…")
+        chips = Adw.WrapBox()
+        chips.set_child_spacing(6)
+        chips.set_line_spacing(6)
+        chips.set_halign(Gtk.Align.CENTER)
+        chips.set_margin_top(2)
+        for name in ("DEB", "RPM", "AppImage", "Flatpak"):
+            chips.append(chip_label(name, accent=True))
+        self.append(chips)
+
+        btn = Gtk.Button()
+        btn.set_child(Adw.ButtonContent(icon_name="folder-open-symbolic", label="选择文件…"))
         btn.add_css_class("pill")
         btn.add_css_class("suggested-action")
         btn.set_halign(Gtk.Align.CENTER)
-        btn.set_margin_top(8)
+        btn.set_margin_top(6)
         self.append(btn)
         self.btn = btn
+
+        hint = Gtk.Label(label="或按 Ctrl+O")
+        hint.add_css_class("caption")
+        hint.add_css_class("dim-label")
+        hint.set_halign(Gtk.Align.CENTER)
+        self.append(hint)
+
+    def set_drag_hover(self, on: bool) -> None:
+        if on:
+            self.add_css_class("drag-hover")
+            self.title.set_label("松开即可检查")
+        else:
+            self.remove_css_class("drag-hover")
+            self.title.set_label("把安装包拖进来")
 
 
 # ─────────────────────────── 主窗口 ───────────────────────────
@@ -183,6 +296,8 @@ class Window(Adw.ApplicationWindow):
         self.set_default_size(880, 720)
         self.current_meta = None
         self.busy = False
+        self._load_gen = 0
+        self.drop_zone = None
 
         self.toast = Adw.ToastOverlay()
         self.set_content(self.toast)
@@ -208,13 +323,19 @@ class Window(Adw.ApplicationWindow):
         self.toolbar.set_content(self.stack)
 
         # ── 页 1：安装 ──
-        self.stack.add_titled(self._build_install_page(), "install", "安装")
+        self.stack.add_titled_with_icon(
+            self._build_install_page(), "install", "安装", "package-x-generic-symbolic",
+        )
 
         # ── 页 2：已安装 ──
-        self.stack.add_titled(self._build_installed_page(), "installed", "已安装")
+        self.stack.add_titled_with_icon(
+            self._build_installed_page(), "installed", "已安装", "view-list-symbolic",
+        )
 
         # ── 拖放 ──
         drop = Gtk.DropTarget.new(Gdk.FileList, Gdk.DragAction.COPY)
+        drop.connect("enter", self._on_drag_enter)
+        drop.connect("leave", self._on_drag_leave)
         drop.connect("drop", self._on_drop)
         self.add_controller(drop)
 
@@ -225,6 +346,14 @@ class Window(Adw.ApplicationWindow):
 
         self.refresh_installed()
 
+    def _toast(self, text: str) -> None:
+        """提示浮在内容区底部，不要压到底栏那个主按钮。"""
+        overlay = getattr(self, "install_toast", None)
+        if overlay is not None and self.stack.get_visible_child_name() == "install":
+            overlay.add_toast(Adw.Toast.new(text))
+        else:
+            self.toast.add_toast(Adw.Toast.new(text))
+
     # ── 事件 ──────────────────────────────────
     def _on_key(self, _c, keyval, _code, state):
         if keyval in (Gdk.KEY_o,) and state & Gdk.ModifierType.CONTROL_MASK:
@@ -232,14 +361,27 @@ class Window(Adw.ApplicationWindow):
             return True
         return False
 
+    def _set_drag_hover(self, on: bool) -> None:
+        # 只在投放区本身给反馈；给整个内容区描边会让人以为窗口也接了拖放
+        if self.drop_zone is not None:
+            self.drop_zone.set_drag_hover(on)
+
+    def _on_drag_enter(self, _t, _x, _y):
+        self._set_drag_hover(True)
+        return Gdk.DragAction.COPY
+
+    def _on_drag_leave(self, _t):
+        self._set_drag_hover(False)
+
     def _on_drop(self, _t, value, _x, _y):
+        self._set_drag_hover(False)
         files = value.get_files() if hasattr(value, "get_files") else []
         for f in files:
             p = f.get_path()
             if p and pkg_format(p):
                 self.load_file(p)
                 return True
-        self.toast.add_toast(Adw.Toast.new("只认 .deb / .rpm / .AppImage / .flatpak 文件"))
+        self._toast("只认 .deb / .rpm / .AppImage / .flatpak 文件")
         return False
 
     def pick_file(self):
@@ -284,19 +426,44 @@ class Window(Adw.ApplicationWindow):
         self.scroll.set_vexpand(True)
 
         self.clamp = Adw.Clamp()
-        self.clamp.set_maximum_size(760)
-        self.clamp.set_margin_top(18)
-        self.clamp.set_margin_bottom(24)
-        self.clamp.set_margin_start(12)
-        self.clamp.set_margin_end(12)
+        self.clamp.set_maximum_size(720)
+        self.clamp.set_margin_top(20)
+        self.clamp.set_margin_bottom(20)
+        self.clamp.set_margin_start(16)
+        self.clamp.set_margin_end(16)
+        self.clamp.set_vexpand(True)
 
-        self.install_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
+        self.install_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        self.install_box.set_vexpand(True)
+        self.install_box.set_margin_bottom(8)
         self.clamp.set_child(self.install_box)
         self.scroll.set_child(self.clamp)
-        self.stack_page_install = self.scroll
+
+        # 这一页单独套一层 ToastOverlay：窗口级那层贴在整窗底部，
+        # toast 会正好压住底栏的主按钮。套在内容区里，它就浮在按钮上方。
+        self.install_toast = Adw.ToastOverlay()
+        self.install_toast.set_child(self.scroll)
+
+        self.install_toolbar = Adw.ToolbarView()
+        self.install_toolbar.set_content(self.install_toast)
+
+        self.install_bar = Gtk.ActionBar()
+        self.install_bar.add_css_class("install-bar")
+        self.install_btn = Gtk.Button()
+        self.install_btn.add_css_class("pill")
+        self.install_btn.add_css_class("install-btn")
+        self.install_btn.connect("clicked", lambda *_: self._on_primary_clicked())
+        self.install_bar.set_center_widget(self.install_btn)
+        self.install_toolbar.add_bottom_bar(self.install_bar)
+        self.install_bar.set_visible(False)
+        self._install_label = "安装到 ~/.local"
+        self._install_icon = "folder-download-symbolic"
+        self._install_suggested = True
+        # "install" = 真的去装；"done" = 装完了，按钮改成去「已安装」页
+        self._primary_mode = "install"
 
         self._show_empty_state()
-        return self.scroll
+        return self.install_toolbar
 
     def _clear_install_box(self):
         child = self.install_box.get_first_child()
@@ -304,101 +471,143 @@ class Window(Adw.ApplicationWindow):
             nxt = child.get_next_sibling()
             self.install_box.remove(child)
             child = nxt
+        self.drop_zone = None
 
     def _show_empty_state(self):
+        self._load_gen += 1
         self._clear_install_box()
+        self.install_box.set_vexpand(True)
         dz = DropZone()
         dz.btn.connect("clicked", lambda *_: self.pick_file())
+        self.drop_zone = dz
         self.install_box.append(dz)
         self.current_meta = None
+        self._primary_mode = "install"
+        self.install_bar.set_visible(False)
+
+    def _set_install_action(self, label: str, suggested: bool, icon):
+        self._install_label = label
+        self._install_suggested = suggested
+        self._install_icon = icon
+        if not self.busy:
+            self._paint_install_button(False)
+        self.install_bar.set_visible(True)
+
+    def _paint_install_button(self, busy: bool) -> None:
+        if self._install_suggested:
+            self.install_btn.add_css_class("suggested-action")
+        else:
+            self.install_btn.remove_css_class("suggested-action")
+        self.install_btn.set_sensitive(not busy)
+        if not busy:
+            # 焦点留在主操作上，别让它跳到卡片右上角的「换个文件」
+            self.install_btn.grab_focus()
+        if busy:
+            row = Gtk.Box(spacing=8)
+            row.set_halign(Gtk.Align.CENTER)
+            sp = Gtk.Spinner()
+            sp.start()
+            row.append(sp)
+            row.append(Gtk.Label(label="安装中…"))
+            self.install_btn.set_child(row)
+            return
+        if self._install_icon:
+            self.install_btn.set_child(Adw.ButtonContent(
+                icon_name=self._install_icon, label=self._install_label,
+            ))
+        else:
+            self.install_btn.set_child(Gtk.Label(label=self._install_label))
 
     # ── 载入一个包 ──────────────────────────────
     def load_file(self, path: str):
         meta = read_pkg_meta(path)
         if not meta.get("_valid"):
             fmt = pkg_format(path)
-            self.toast.add_toast(
-                Adw.Toast.new(f"这不像一个合法的 .{fmt} 包" if fmt else "不认识的包格式")
-            )
+            self._toast(f"这不像一个合法的 .{fmt} 包" if fmt else "不认识的包格式")
             return
+        self._load_gen += 1
+        gen = self._load_gen
         self.current_meta = meta
         self._render_package(meta)
 
-        # 后台跑 pkg2local --json 拿 Arch 生态对照和缺依赖
+        # 后台跑 pkg2local --json 拿 Arch 生态对照和缺依赖。
+        # 换文件或回到空态后，旧结果直接丢掉，避免写到下一张卡片上。
         self._spawn(
             [BACKEND, path, "--json"],
-            self._on_deps_json,
+            lambda code, out, err, g=gen: self._on_deps_json(code, out, err) if g == self._load_gen else None,
         )
 
     def _render_package(self, meta: dict):
         self._clear_install_box()
+        self.install_box.set_vexpand(False)
 
-        # ── 文件卡 ──
+        fmt = (meta.get("_format") or "").lower()
         head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
         head.add_css_class("card")
-        head.set_margin_top(0)
+        head.add_css_class("pkg-card")
 
-        ic = Gtk.Image.new_from_icon_name("package-x-generic-symbolic")
-        ic.set_pixel_size(48)
-        ic.add_css_class("dim-label")
-        head.append(ic)
+        head.append(icon_well(format_icon(fmt), 52, "icon-well"))
 
-        txt = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        txt = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         txt.set_hexpand(True)
-        name = Gtk.Label(label=meta.get("Package", "?"))
+        txt.set_valign(Gtk.Align.CENTER)
+
+        name = Gtk.Label(label=meta.get("Package") or "未命名")
         name.add_css_class("title-2")
         name.set_xalign(0)
+        name.set_hexpand(True)
         name.set_ellipsize(3)
         txt.append(name)
-
-        sub = Gtk.Label(
-            label=f"版本 {meta.get('Version','?')}  ·  {meta.get('Architecture','?')}"
-                  f"  ·  {(meta.get('_format') or '?').upper()}"
-                  f"  ·  {human_size(meta.get('_size', 0))}"
-        )
-        sub.add_css_class("dim-label")
-        sub.set_xalign(0)
-        txt.append(sub)
 
         fn = Gtk.Label(label=os.path.basename(meta.get("_file", "")))
         fn.add_css_class("caption")
         fn.add_css_class("dim-label")
         fn.set_xalign(0)
+        fn.set_hexpand(True)
         fn.set_ellipsize(3)
         txt.append(fn)
+
+        chips = Adw.WrapBox()
+        chips.set_child_spacing(6)
+        chips.set_line_spacing(6)
+        chips.set_halign(Gtk.Align.START)
+        chips.set_margin_top(4)
+        if meta.get("Version"):
+            chips.append(chip_label(str(meta["Version"])))
+        if meta.get("Architecture"):
+            chips.append(chip_label(str(meta["Architecture"])))
+        if fmt:
+            chips.append(chip_label(format_label(fmt), accent=True))
+        if meta.get("_size"):
+            chips.append(chip_label(human_size(meta["_size"])))
+        txt.append(chips)
         head.append(txt)
 
         btn_clear = Gtk.Button(icon_name="window-close-symbolic")
         btn_clear.add_css_class("flat")
+        btn_clear.add_css_class("circular")
         btn_clear.set_valign(Gtk.Align.CENTER)
         btn_clear.set_tooltip_text("换个文件")
         btn_clear.connect("clicked", lambda *_: self._show_empty_state())
         head.append(btn_clear)
-
-        wrap = Gtk.Box()
-        wrap.add_css_class("card")
-        wrap.append(head)
-        self.install_box.append(wrap)
+        self.install_box.append(head)
 
         # ── 结论区（先占位，等 JSON 回来填） ──
-        self.result_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        self.result_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         self.install_box.append(self.result_box)
-
-        self.spinner_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        sp = Gtk.Spinner()
-        sp.start()
-        self.spinner_row.append(sp)
-        lbl = Gtk.Label(label="正在检查 Arch 生态和依赖…")
-        lbl.add_css_class("dim-label")
-        self.spinner_row.append(lbl)
-        self.result_box.append(self.spinner_row)
+        self.loading_card = self._add_banner(
+            "正在检查",
+            "对照 Arch 仓库、AUR，以及这个包声明的依赖。",
+            "info",
+            spinner=True,
+        )
 
         # ── 依赖清单 ──
         dep = meta.get("Depends", "")
         if dep:
             exp = Adw.ExpanderRow()
             # flatpak 那一栏放的其实是 runtime（org.gnome.Platform/x86_64/50），不是依赖
-            exp.set_title("依赖的运行时" if meta.get("_format") == "flatpak" else "声明的依赖")
+            exp.set_title("依赖的运行时" if fmt == "flatpak" else "声明的依赖")
             n = len([d for d in dep.split(",") if d.strip()])
             exp.set_subtitle(f"{n} 项")
             for d in dep.split(","):
@@ -415,25 +624,19 @@ class Window(Adw.ApplicationWindow):
             box.append(exp)
             self.install_box.append(box)
 
-        self.install_btn = Gtk.Button(
-            label="交给 flatpak 安装" if meta.get("_format") == "flatpak" else "安装到 ~/.local"
-        )
-        self.install_btn.add_css_class("suggested-action")
-        self.install_btn.add_css_class("pill")
-        self.install_btn.set_halign(Gtk.Align.CENTER)
-        self.install_btn.set_size_request(220, -1)
-        self.install_btn.connect("clicked", lambda *_: self.do_install())
-        self.install_box.append(self.install_btn)
+        label = "交给 flatpak 安装" if fmt == "flatpak" else "安装到 ~/.local"
+        self._set_install_action(label, True, "folder-download-symbolic")
 
     def _on_deps_json(self, code: int, out: str, err: str):
-        if self.install_box.get_first_child() is None:
+        if not hasattr(self, "result_box") or self.result_box.get_parent() is None:
             return
-        if hasattr(self, "spinner_row") and self.spinner_row.get_parent():
-            self.result_box.remove(self.spinner_row)
+        loading = getattr(self, "loading_card", None)
+        if loading is not None and loading.get_parent() is self.result_box:
+            self.result_box.remove(loading)
         try:
             data = json.loads(out.strip().splitlines()[-1])
         except (json.JSONDecodeError, IndexError):
-            self._add_banner("检查失败", "无法解析 pkg2local 的输出", C_RED)
+            self._add_banner("检查失败", "无法解析 pkg2local 的输出", "err")
             return
         alt = data.get("arch_equivalent") or ""
         missing = data.get("missing_deps") or []
@@ -442,22 +645,16 @@ class Window(Adw.ApplicationWindow):
 
         if alt:
             kind = "AUR" if alt.startswith("aur/") else "仓库"
+            pkg_name = alt.split("/")[-1]
+            cmd = f"paru -S {pkg_name}"
             self._add_banner(
                 f"{kind} 已经有现成的包",
-                f"{alt}  ——  直接  paru -S {alt.split('/')[-1]}  更省事，"
-                f"跟着系统一起升级，不用担心依赖漂移。",
-                C_YEL,
+                f"{alt} 可以直接装，跟着系统一起升级，不用担心依赖漂移。",
+                "warn",
+                command=cmd,
+                action=("复制命令", lambda c=cmd: self._copy(c), True),
             )
-            if self.install_btn:
-                self.install_btn.remove_css_class("suggested-action")
-                self.install_btn.add_css_class("pill")
-                self.install_btn.set_label("仍要安装这个包（不推荐）")
-            copy = Gtk.Button(label=f"复制  paru -S {alt.split('/')[-1]}")
-            copy.add_css_class("pill")
-            copy.add_css_class("suggested-action")
-            copy.set_halign(Gtk.Align.CENTER)
-            copy.connect("clicked", lambda *_: self._copy(f"paru -S {alt.split('/')[-1]}"))
-            self.result_box.append(copy)
+            self._set_install_action("仍要安装这个包（不推荐）", False, None)
 
         # AppImage / flatpak 不参与依赖检查：前者自带 runtime，
         # 后者用 flatpak 自己的 runtime。不说清楚的话绿色「依赖齐全」会误导，
@@ -467,29 +664,24 @@ class Window(Adw.ApplicationWindow):
                 "自带运行时",
                 "AppImage 把依赖和运行时都打包在文件里，不需要在系统里找库。"
                 "安装只是把它抄进 ~/.local/opt 并登记图标和菜单项。",
-                C_GRN,
+                "ok",
             )
         elif fmt == "flatpak":
             self._add_banner(
                 "依赖由运行时提供",
                 "flatpak 应用跑在自己的沙箱运行时里，不依赖系统的库。"
                 "安装会交给 flatpak install --user，runtime 缺的话它会自动去 Flathub 拉。",
-                C_GRN,
+                "ok",
             )
         elif missing:
+            cmd = "sudo pacman -S --needed " + " ".join(missing)
             self._add_banner(
                 f"缺 {len(missing)} 个依赖",
-                "先补依赖再装，否则装完可能跑不起来：\n"
-                + "sudo pacman -S --needed " + " ".join(missing),
-                C_RED,
+                "先补依赖再装，否则装完可能跑不起来。",
+                "err",
+                command=cmd,
+                action=("复制命令", lambda c=cmd: self._copy(c), False),
             )
-            copy = Gtk.Button(label="复制 pacman 命令")
-            copy.add_css_class("pill")
-            copy.connect(
-                "clicked",
-                lambda *_: self._copy("sudo pacman -S --needed " + " ".join(missing)),
-            )
-            self.result_box.append(copy)
         elif unknown:
             self._add_banner(
                 f"{len(unknown)} 项依赖没收录映射",
@@ -497,119 +689,180 @@ class Window(Adw.ApplicationWindow):
                 + ", ".join(unknown)
                 + "\n\n不确定的话，装完点「已安装」页的 ▶ 试跑一次，"
                   "再用 ldd 查缺什么。",
-                C_YEL,
+                "warn",
             )
         else:
             self._add_banner(
                 "依赖齐全",
                 "声明的依赖在系统里都找得到，可以直接装。",
-                C_GRN,
+                "ok",
             )
 
-    def _add_banner(self, title: str, body: str, color: str):
-        f = Adw.PreferencesGroup()
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        dot = Gtk.DrawingArea()
-        dot.set_content_width(8)
-        dot.set_content_height(8)
-        rgb = tuple(int(color[i:i + 2], 16) / 255 for i in (1, 3, 5))
+    def _add_banner(self, title: str, body: str, tone: str, command=None, action=None, spinner=False):
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        card.add_css_class("status-card")
+        card.add_css_class(f"tone-{tone}")
 
-        def _draw(_area, cr, w, h, *_rest):
-            cr.set_source_rgb(*rgb)
-            cr.arc(w / 2, h / 2, min(w, h) / 2 - 1, 0, 6.2832)
-            cr.fill()
-
-        dot.set_draw_func(_draw)
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        row.set_margin_top(4)
-        row.append(dot)
+        if spinner:
+            sp = Gtk.Spinner()
+            sp.set_valign(Gtk.Align.CENTER)
+            sp.start()
+            row.append(sp)
+        else:
+            row.append(icon_well(
+                TONE_ICON.get(tone, "dialog-information-symbolic"),
+                28, "status-icon", f"tone-{tone}",
+            ))
         lbl = Gtk.Label()
         lbl.set_markup(f"<b>{GLib.markup_escape_text(title)}</b>")
         lbl.set_xalign(0)
+        lbl.set_hexpand(True)
+        lbl.set_wrap(True)
+        lbl.set_valign(Gtk.Align.CENTER)
         row.append(lbl)
-        box.append(row)
+        card.append(row)
 
-        b = Gtk.Label(label=body)
-        b.set_wrap(True)
-        b.set_xalign(0)
-        b.set_selectable(True)
-        b.add_css_class("dim-label")
-        b.set_margin_start(16)
-        box.append(b)
+        if body:
+            b = Gtk.Label(label=body)
+            b.set_wrap(True)
+            # 必须用 WORD：WORD_CHAR 的 min-width 等于整段文字的自然宽度
+            # （实测 824px），长正文会把窗口顶宽 —— 880 被顶到 888 就是这么来的。
+            b.set_wrap_mode(Gtk.WrapMode.WORD)
+            b.set_xalign(0)
+            b.set_selectable(True)
+            b.set_max_width_chars(52)
+            card.append(b)
 
-        holder = Gtk.Box()
-        holder.add_css_class("card")
-        holder.append(box)
-        self.result_box.append(holder)
+        if command:
+            cmd = Gtk.Label(label=command)
+            cmd.add_css_class("command")
+            cmd.set_wrap(True)
+            # 同上：WORD_CHAR 的 min-width 是整行宽度，缺一长串依赖时会把窗口撑宽
+            cmd.set_wrap_mode(Gtk.WrapMode.WORD)
+            cmd.set_xalign(0)
+            cmd.set_selectable(True)
+            cmd.set_halign(Gtk.Align.FILL)
+            card.append(cmd)
+
+        if action:
+            text, cb, suggested = action
+            btn = Gtk.Button()
+            btn.set_child(Adw.ButtonContent(icon_name="edit-copy-symbolic", label=text))
+            btn.add_css_class("pill")
+            if suggested:
+                btn.add_css_class("suggested-action")
+            btn.set_halign(Gtk.Align.START)
+            btn.connect("clicked", lambda *_: cb())
+            card.append(btn)
+
+        self.result_box.append(card)
+        return card
 
     # ── 执行安装 ────────────────────────────────
+    def _on_primary_clicked(self):
+        """底部主按钮：装完之后它变成「打开已安装」，不该再触发一次安装。"""
+        if self._primary_mode == "done":
+            self.stack.set_visible_child_name("installed")
+            return
+        self.do_install()
+
     def do_install(self):
         if not self.current_meta or self.busy:
             return
         self.busy = True
-        self.install_btn.set_sensitive(False)
-        self.install_btn.set_label("安装中…")
+        self._paint_install_button(True)
 
         path = self.current_meta["_file"]
         self._spawn([BACKEND, path, "-y"], self._on_install_done, capture_all=True)
 
     def _on_install_done(self, code: int, out: str, err: str):
         self.busy = False
-        if hasattr(self, "install_btn"):
-            self.install_btn.set_sensitive(True)
+        self._paint_install_button(False)
         log = (out + err).strip()
+        # 结果用卡片说，不弹 toast：底部主按钮就在同一条中线上，toast 会正盖住它。
+        # 装完（无论成败），装之前那些建议（"AUR 有现成的包"、"依赖齐全"）
+        # 都已过期，留着会和结果互相打架，只保留结果和日志。
+        self._clear_result_box()
         if code == 0:
-            self.toast.add_toast(Adw.Toast.new("装好了"))
             self.refresh_installed()
-            self._show_log("安装成功", log, C_GRN)
-            self.stack.set_visible_child_name("installed")
+            self._show_log("安装成功", log, "ok")
+            # 留在本页让日志可见；按钮换成下一步，而不是留着"安装"让人重复点
+            self._primary_mode = "done"
+            self._set_install_action("打开「已安装」", True, "view-list-symbolic")
         else:
-            self.toast.add_toast(Adw.Toast.new("安装失败"))
-            self._show_log("安装失败", log, C_RED)
+            self._show_log("安装失败", log or "后端没有输出。", "err")
+            self._set_install_action("重试安装", True, "view-refresh-symbolic")
 
-    def _show_log(self, title: str, log: str, color: str):
-        # 把进度日志塞进一个可折叠区域
-        if hasattr(self, "log_expander") and self.log_expander.get_parent():
-            self.log_expander.get_parent().remove(self.log_expander)
-        exp = Adw.ExpanderRow()
-        exp.set_title(title)
-        exp.set_subtitle("展开看完整日志")
-        exp.set_expanded(True)
+    def _clear_result_box(self):
+        child = self.result_box.get_first_child()
+        while child is not None:
+            nxt = child.get_next_sibling()
+            self.result_box.remove(child)
+            child = nxt
+        self.log_card = None
+
+    def _show_log(self, title: str, log: str, tone: str):
+        if not hasattr(self, "result_box") or self.result_box.get_parent() is None:
+            return
+        old = getattr(self, "log_card", None)
+        if old is not None and old.get_parent() is self.result_box:
+            self.result_box.remove(old)
+
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        card.add_css_class("card")
+        card.add_css_class("log-card")
+
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        row.append(icon_well(TONE_ICON.get(tone, "dialog-information-symbolic"), 28, "status-icon", f"tone-{tone}"))
+        lbl = Gtk.Label()
+        lbl.set_markup(f"<b>{GLib.markup_escape_text(title)}</b>")
+        lbl.set_xalign(0)
+        lbl.set_hexpand(True)
+        lbl.set_valign(Gtk.Align.CENTER)
+        row.append(lbl)
+        card.append(row)
+
         tv = Gtk.TextView()
         tv.set_editable(False)
         tv.set_monospace(True)
-        buf = tv.get_buffer()
-        buf.set_text(log)
+        tv.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        tv.add_css_class("log-view")
+        tv.set_left_margin(12)
+        tv.set_right_margin(12)
+        tv.set_top_margin(10)
+        tv.set_bottom_margin(10)
+        tv.get_buffer().set_text(log)
         sw = Gtk.ScrolledWindow()
         sw.set_child(tv)
-        sw.set_min_content_height(200)
-        row = Adw.ActionRow()
-        row.set_child(sw)
-        exp.add_row(row)
-        box = Gtk.ListBox()
-        box.add_css_class("boxed-list")
-        box.set_selection_mode(Gtk.SelectionMode.NONE)
-        box.append(exp)
-        if hasattr(self, "result_box"):
-            self.result_box.append(box)
-        self.log_expander = exp
+        sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        sw.set_min_content_height(120)
+        sw.set_max_content_height(320)
+        sw.set_propagate_natural_height(True)
+        sw.add_css_class("log-scroll")
+        card.append(sw)
+
+        self.result_box.append(card)
+        self.log_card = card
 
     def _copy(self, text: str):
         cb = Gdk.Display.get_default().get_clipboard()
         cb.set(text)
-        self.toast.add_toast(Adw.Toast.new("已复制"))
+        self._toast("已复制")
 
     # ── 页 2：已安装 ────────────────────────────
     def _build_installed_page(self):
         self.inst_scroll = Gtk.ScrolledWindow()
         self.inst_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         self.inst_clamp = Adw.Clamp()
-        self.inst_clamp.set_maximum_size(760)
-        self.inst_clamp.set_margin_top(18)
+        self.inst_clamp.set_maximum_size(720)
+        self.inst_clamp.set_margin_top(20)
         self.inst_clamp.set_margin_bottom(24)
-        self.inst_clamp.set_margin_start(12)
-        self.inst_clamp.set_margin_end(12)
+        self.inst_clamp.set_margin_start(16)
+        self.inst_clamp.set_margin_end(16)
+        self.inst_clamp.set_vexpand(True)
         self.inst_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        self.inst_box.set_vexpand(True)
         self.inst_clamp.set_child(self.inst_box)
         self.inst_scroll.set_child(self.inst_clamp)
         return self.inst_scroll
@@ -624,37 +877,59 @@ class Window(Adw.ApplicationWindow):
         items = list_installed()
         if not items:
             sp = Adw.StatusPage()
-            sp.set_icon_name("package-x-generic-symbolic")
             sp.set_title("还没装过包")
-            sp.set_description("装过的包会出现在这里，每个都能一键卸载。")
+            sp.set_description("装过的应用会出现在这里，可以启动，也可以卸载。")
+            apply_brand_icon(sp, "package-x-generic-symbolic")
+            sp.set_vexpand(True)
+            go = Gtk.Button(label="去安装")
+            go.add_css_class("pill")
+            go.add_css_class("suggested-action")
+            go.set_halign(Gtk.Align.CENTER)
+            go.connect("clicked", lambda *_: self.stack.set_visible_child_name("install"))
+            sp.set_child(go)
             self.inst_box.append(sp)
             return
 
         group = Adw.PreferencesGroup()
-        group.set_title(f"通过 pkg2local 装的应用（{len(items)}）")
-        group.set_description("这些都在 ~/.local 下，不占 pacman 数据库")
+        group.set_title("本工具安装的应用")
+        group.set_description(f"{len(items)} 个，都在 ~/.local 下，不写入 pacman 数据库")
 
         for m in items:
             row = Adw.ActionRow()
-            row.set_title(m.get("package", "?"))
-            sub = f"{m.get('version','?')}  ·  {m.get('installed_at','')[:10]}"
+            fmt = (m.get("format") or "").lower()
+            row.add_prefix(icon_well(format_icon(fmt), 36, "icon-well-sm"))
+            row.set_title(m.get("package") or "?")
+            bits = []
+            if m.get("version"):
+                bits.append(str(m["version"]))
+            installed = (m.get("installed_at") or "")[:10]
+            if installed:
+                bits.append(installed)
             exes = m.get("executables") or []
             if exes:
-                sub += "  ·  " + ", ".join(exes[:3])
-            row.set_subtitle(sub)
+                bits.append(", ".join(exes[:3]))
+            row.set_subtitle("  ·  ".join(bits) if bits else "没有版本信息")
+
+            if fmt:
+                badge = chip_label(format_label(fmt), accent=True)
+                badge.set_valign(Gtk.Align.CENTER)
+                row.add_suffix(badge)
 
             run = Gtk.Button(icon_name="media-playback-start-symbolic")
             run.add_css_class("flat")
+            run.add_css_class("circular")
             run.set_valign(Gtk.Align.CENTER)
             run.set_tooltip_text("启动")
             if exes:
                 run.connect("clicked", lambda _b, e=exes[0]: self._launch(e))
             else:
                 run.set_sensitive(False)
+                run.set_tooltip_text("这个包没有可执行文件")
             row.add_suffix(run)
 
             rm = Gtk.Button(icon_name="user-trash-symbolic")
             rm.add_css_class("flat")
+            rm.add_css_class("circular")
             rm.set_valign(Gtk.Align.CENTER)
             rm.set_tooltip_text("卸载")
             rm.connect("clicked", lambda _b, pkg=m.get("package"): self._confirm_uninstall(pkg))
@@ -662,11 +937,7 @@ class Window(Adw.ApplicationWindow):
 
             group.add(row)
 
-        box = Gtk.ListBox()
-        box.add_css_class("boxed-list")
-        box.set_selection_mode(Gtk.SelectionMode.NONE)
-        box.append(group)
-        self.inst_box.append(box)
+        self.inst_box.append(group)
 
     def _launch(self, exe: str):
         p = shutil.which(exe) or str(BIN_DIR / exe)
@@ -727,8 +998,107 @@ class Window(Adw.ApplicationWindow):
 
 
 # ─────────────────────────── 启动 ───────────────────────────
-CSS = f"""
-.drop-target {{ border: 2px dashed alpha(currentColor, 0.25); border-radius: 12px; }}
+CSS = """
+.drop-zone {
+  padding: 36px 28px 28px;
+  border-radius: 18px;
+  border: 1.5px dashed alpha(currentColor, 0.22);
+  background-color: alpha(@accent_bg_color, 0.035);
+}
+.drop-zone.drag-hover {
+  border-color: @accent_bg_color;
+  background-color: alpha(@accent_bg_color, 0.12);
+}
+/* 底色用 accent_bg、前景另给：直接用 @accent_color 会在深色模式下
+   把深蓝压到深灰上，等于看不见 */
+.icon-well {
+  border-radius: 16px;
+  background-color: alpha(@accent_bg_color, 0.18);
+  color: @accent_bg_color;
+}
+.icon-well-sm {
+  border-radius: 10px;
+  background-color: alpha(@accent_bg_color, 0.18);
+  color: @accent_bg_color;
+}
+.pkg-card,
+.log-card {
+  padding: 14px 16px;
+}
+.chip {
+  padding: 3px 9px;
+  border-radius: 999px;
+  background-color: alpha(currentColor, 0.08);
+  font-size: 0.78em;
+  font-weight: 700;
+}
+/* 表单里重复出现三次的格式徽标用淡底，
+   实心 accent 留给主按钮，避免和操作抢注意力 */
+.chip-accent {
+  background-color: alpha(@accent_bg_color, 0.16);
+  color: @accent_bg_color;
+}
+.status-card {
+  padding: 14px 16px;
+  border-radius: 12px;
+  background-color: @card_bg_color;
+}
+/* 整块染色在深色模式下会混成泥黄/泥绿，所以只留左侧竖条和图标上色 */
+.status-card.tone-ok {
+  box-shadow: inset 3px 0 0 0 @success_color;
+}
+.status-card.tone-warn {
+  box-shadow: inset 3px 0 0 0 @warning_color;
+}
+.status-card.tone-err {
+  box-shadow: inset 3px 0 0 0 @error_color;
+}
+.status-card.tone-info {
+  box-shadow: inset 3px 0 0 0 @accent_bg_color;
+}
+.status-icon {
+  border-radius: 999px;
+}
+.status-icon.tone-ok {
+  background-color: alpha(@success_color, 0.18);
+  color: @success_color;
+}
+.status-icon.tone-warn {
+  background-color: alpha(@warning_color, 0.22);
+  color: @warning_color;
+}
+.status-icon.tone-err {
+  background-color: alpha(@error_color, 0.16);
+  color: @error_color;
+}
+.status-icon.tone-info {
+  background-color: alpha(@accent_bg_color, 0.16);
+  color: @accent_bg_color;
+}
+.command {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background-color: alpha(@window_fg_color, 0.06);
+  font-family: monospace;
+}
+.log-scroll {
+  border-radius: 10px;
+  background-color: alpha(@window_fg_color, 0.045);
+}
+textview.log-view,
+textview.log-view text {
+  background-color: transparent;
+}
+/* 底栏在 Adw.ToolbarView 里与内容同色，加一道细分隔线才有"操作区"的边界 */
+.install-bar {
+  padding-top: 6px;
+  padding-bottom: 6px;
+  box-shadow: inset 0 1px 0 alpha(currentColor, 0.10);
+}
+button.install-btn {
+  padding-left: 18px;
+  padding-right: 18px;
+}
 """
 
 
@@ -756,6 +1126,13 @@ class App(Adw.Application):
         os._exit(0)   # 跳过 renderer dispose 的 assert
 
     def on_activate(self, *_):
+        scheme = os.environ.get("PKG_INSTALLER_COLOR_SCHEME", "").lower()
+        style = Adw.StyleManager.get_default()
+        if scheme == "dark":
+            style.set_color_scheme(Adw.ColorScheme.FORCE_DARK)
+        elif scheme == "light":
+            style.set_color_scheme(Adw.ColorScheme.FORCE_LIGHT)
+
         prov = Gtk.CssProvider()
         prov.load_from_string(CSS)
         Gtk.StyleContext.add_provider_for_display(
@@ -766,14 +1143,24 @@ class App(Adw.Application):
         w.present()
         shot_path = os.environ.get("PKG_INSTALLER_SHOT") or os.environ.get("DEB_INSTALLER_SHOT")
         # 命令行带文件路径则直接载入（必须在装定时器之前，autoinstall 才能看到）
-        for a in sys.argv[1:]:
-            if pkg_format(a) and os.path.isfile(a):
-                w.load_file(a)
-                break
+        # 给了路径却载不进来时要说一声，否则界面停在空态、像什么都没发生
+        given = [a for a in sys.argv[1:] if not a.startswith("-")]
+        loaded = False
+        for a in given:
+            if not os.path.isfile(a):
+                continue
+            if not pkg_format(a):
+                w._toast(f"{os.path.basename(a)} 不是支持的包格式")
+                continue
+            w.load_file(a)
+            loaded = True
+            break
+        if given and not loaded and not any(os.path.isfile(a) for a in given):
+            w._toast(f"找不到 {os.path.basename(given[0])}")
 
         tab = os.environ.get("PKG_INSTALLER_TAB") or os.environ.get("DEB_INSTALLER_TAB")
         if tab:
-            GLib.timeout_add(1200, lambda: (w.stack.set_visible_child_name(tab), False)[1])
+            GLib.timeout_add(400, lambda: (w.stack.set_visible_child_name(tab), False)[1])
         auto = os.environ.get("PKG_INSTALLER_AUTOINSTALL") or os.environ.get("DEB_INSTALLER_AUTOINSTALL")
         if auto and w.current_meta:
             GLib.timeout_add(6000, lambda: (w.do_install(), False)[1])

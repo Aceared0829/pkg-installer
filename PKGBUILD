@@ -1,6 +1,6 @@
 # Maintainer: Acear <zzn1982638980@gmail.com>
 pkgname=pkg-installer
-pkgver=2.1.0
+pkgver=2.2.0
 pkgrel=1
 pkgdesc="Install .deb, .rpm, .AppImage and .flatpak packages on Arch Linux without root, into your home directory"
 arch=('any')
