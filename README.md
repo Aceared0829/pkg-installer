@@ -68,13 +68,18 @@
 ```bash
 # /etc/pacman.conf 末尾追加
 [pkg-installer]
+SigLevel = Optional TrustAll
 Server = https://aceared0829.github.io/pkg-installer/x86_64
 
 sudo pacman -Sy
 sudo pacman -S pkg-installer
 ```
 
-仓库没签名，不想动 `SigLevel` 的话直接下包：
+`SigLevel` 那行不能省：仓库没签名，不写的话 pacman 会去找 `.sig` 文件，
+拿到 404 就整个事务失败（`无法获取某些文件`）。`Optional TrustAll` 只作用于
+这一个仓库，不影响其它库的签名检查。
+
+不想改 `pacman.conf` 就直接下包：
 
 ```bash
 sudo pacman -U https://aceared0829.github.io/pkg-installer/x86_64/pkg-installer-2.2.0-1-any.pkg.tar.zst
@@ -312,12 +317,17 @@ From the pacman repo (upgrades with `pacman -Syu`):
 ```bash
 # append to /etc/pacman.conf
 [pkg-installer]
+SigLevel = Optional TrustAll
 Server = https://aceared0829.github.io/pkg-installer/x86_64
 
 sudo pacman -Sy && sudo pacman -S pkg-installer
 ```
 
-The repo is unsigned, so alternatively grab the package directly:
+The `SigLevel` line is required: the repo is unsigned, and without it pacman
+fetches a `.sig` file, gets a 404, and aborts the whole transaction. The
+override applies only to this repo.
+
+Or grab the package without touching `pacman.conf`:
 
 ```bash
 sudo pacman -U https://aceared0829.github.io/pkg-installer/x86_64/pkg-installer-2.2.0-1-any.pkg.tar.zst
