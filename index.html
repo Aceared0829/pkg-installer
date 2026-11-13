@@ -50,6 +50,7 @@
   <h2>加仓库</h2>
   <pre><code># /etc/pacman.conf 末尾追加
 [pkg-installer]
+SigLevel = Optional TrustAll
 Server = https://aceared0829.github.io/pkg-installer/x86_64
 
 # 然后
@@ -57,7 +58,9 @@ sudo pacman -Sy
 sudo pacman -S pkg-installer</code></pre>
 
   <div class="note">
-    仓库没有签名。不想改 <code>SigLevel</code> 的话，直接下包安装也一样：<br>
+    <code>SigLevel</code> 那行不能省：仓库没签名，不写的话 pacman 会去找 <code>.sig</code> 文件，
+    拿到 404 就整个事务失败。这一句只作用于本仓库，不影响其它库。<br>
+    不想改 <code>pacman.conf</code> 就直接下包：<br>
     <code>sudo pacman -U https://aceared0829.github.io/pkg-installer/x86_64/pkg-installer-2.2.0-1-any.pkg.tar.zst</code>
   </div>
 
