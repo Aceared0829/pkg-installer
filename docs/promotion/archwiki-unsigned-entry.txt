@@ -9,3 +9,27 @@
 SigLevel = Optional TrustAll
 Server = https://aceared0829.github.io/pkg-installer/x86_64
 </nowiki>}}
+
+------------------------------------------------------------------
+
+贴的位置与注意事项（给自己看的，不要贴进 wiki）
+
+1. 页面：https://wiki.archlinux.org/title/Unofficial_user_repositories
+   protection 为空，登录即可编辑。必须放在 == Unsigned == 段内。
+
+2. 字母序：Unsigned 段现有 16 条，按字母排。pkg-installer 排在
+   mesa-git 之后、principia 之前（p 段里 "pkg-" 在 "prin-" 之前）。
+
+3. 维护者必须写昵称 + 可联系到的地址。上面写的是 GitHub 主页；
+   如果想让别人真能联系上，建议同时给邮箱（网页编辑器里可以用
+   [mailto:... ...] 或者直接写 <at> 形式，参考 selinux 那条）。
+
+4. SigLevel：页面顶部有一条 {{Note}} 提示「用户需要自己加
+   SigLevel = PackageOptional」。实测这两种写法都能装：
+     SigLevel = Optional TrustAll     ← README / 落地页用的，本条目也用这个
+     SigLevel = PackageOptional       ← 页面 Note 建议的写法
+   两种都在隔离 root 里装通过（/tmp/sigtest 与 /tmp/live4），
+   所以保留 TrustAll 不会让读者踩坑；写成 Wiki 惯例那种也可以。
+
+5. 别写「recommended」之类的推销词。这一页的条目都是中性的
+   Maintainer / Description / Upstream page 三段式。
