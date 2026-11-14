@@ -1107,16 +1107,30 @@ class App(Adw.Application):
         super().__init__(application_id=APP_ID, flags=0)
         self.connect("activate", self.on_activate)
 
-    def _grab(self, w, path):
+    def _grab(self, w, path, attempt=0):
         """把窗口内容直接渲成 PNG（自测/文档用）"""
-        import cairo
         from gi.repository import Graphene, Gsk
 
         width, height = w.get_width(), w.get_height()
+        if width == 0 or height == 0:
+            # 窗口还没分配尺寸，这时候 snapshot 出来是空的
+            if attempt < 20:
+                GLib.timeout_add(100, lambda: (self._grab(w, path, attempt + 1), False)[1])
+                return
+            print("[shot] 窗口一直没有尺寸，放弃", file=sys.stderr)
+            os._exit(1)
         p = Gtk.WidgetPaintable.new(w)
         snap = Gtk.Snapshot()
         p.snapshot(snap, width, height)
         node = snap.to_node()
+        if node is None:
+            # 控件树还没建完时 snapshot 是空的，to_node() 给 None，
+            # 直接交给 render_texture 会炸 TypeError: Argument 1 does not allow None as a value
+            if attempt < 20:
+                GLib.timeout_add(100, lambda: (self._grab(w, path, attempt + 1), False)[1])
+                return
+            print("[shot] 渲染树一直是空的，放弃", file=sys.stderr)
+            os._exit(1)
         r = Gsk.CairoRenderer.new()
         r.realize_for_display(w.get_display())
         tex = r.render_texture(node, Graphene.Rect().init(0, 0, width, height))
