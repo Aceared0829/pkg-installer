@@ -1,0 +1,85 @@
+name: publish-repo
+
+# 发版后把 release 里的 .pkg.tar.zst 塞进 gh-pages 上的 pacman 仓库。
+#
+# 刻意不重新编译：直接取 release 资产，这样仓库里的包和 release 上的
+# 是同一个文件（连 sha256 都一样）。重新 makepkg 会带上新的 builddate，
+# 两个地方就会发出内容不同、哈希不同的包。
+#
+# 手动触发可以指定任意已存在的 tag，用来补发或重跑。
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 要发布的 tag（例如 v2.2.0）
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: 装依赖
+        run: pacman -Syu --noconfirm --needed pacman git curl
+
+      - name: 取 release 里的包
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          set -euo pipefail
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          mkdir -p /tmp/pkg
+          URL="https://github.com/${{ github.repository }}/releases/download/$TAG"
+          # release 里附了什么包，就从 API 里读出来，不用把版本号写死在这
+          curl -fsSL "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG" \
+            | grep -o '"browser_download_url": *"[^"]*\.pkg\.tar\.zst"' \
+            | sed 's/.*"\(https[^"]*\)"/\1/' > /tmp/assets.txt
+          if [ ! -s /tmp/assets.txt ]; then
+            echo "::error::tag $TAG 的这个 release 没有附 .pkg.tar.zst，先把包传上去"
+            exit 1
+          fi
+          cd /tmp/pkg
+          while read -r u; do
+            echo "下载 $u"
+            curl -fsSLO "$u"
+          done < /tmp/assets.txt
+          ls -l
+
+      - name: 更新 gh-pages 上的仓库数据库
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory '*'
+          git config --global user.name  'github-actions[bot]'
+          git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          git clone --branch gh-pages --depth 1 \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" /tmp/pages
+          cd /tmp/pages
+          mkdir -p x86_64
+          cp /tmp/pkg/*.pkg.tar.zst x86_64/
+
+          cd x86_64
+          for f in *.pkg.tar.zst; do
+            repo-add --quiet pkg-installer.db.tar.gz "$f"
+          done
+          # GitHub Pages 是静态托管，符号链接会变成一小段文本文件，
+          # 所以把 db / files 摊平成实体文件再传。
+          rm -f pkg-installer.db pkg-installer.files
+          cp pkg-installer.db.tar.gz    pkg-installer.db
+          cp pkg-installer.files.tar.gz pkg-installer.files
+
+          cd /tmp/pages
+          git add -A x86_64
+          if git diff --cached --quiet; then
+            echo "仓库已经是最新，没有改动"
+            exit 0
+          fi
+          git commit -m "repo: 发布 $TAG"
+          git push origin gh-pages
