@@ -51,11 +51,31 @@ cd pages
 mkdir -p x86_64
 cp "$WORK"/*.pkg.tar.zst x86_64/
 
+# repo-add 用当前时间写 tar 成员头，同样的内容两次跑出来的字节不一样。
+# 不归一化的话，每次「发布」都会产生一个只差 mtime 的新提交，空跑也不幂等。
+# 做法：解开 → 把 mtime 全部归零 → 用固定参数重新打包。
+normalize_db() {
+  local f="$1" tmp
+  tmp="$(mktemp -d)"
+  bsdtar -xf "$f" -C "$tmp"
+  find "$tmp" -exec touch -d @0 {} +
+  # 打包文件写在 tmp 外面：写在里面 bsdtar 会报 Can't add archive to itself。
+  # 用 * 而不是 . —— 带 ./ 前缀的话成员名会变成 ./<包>-<版本>/desc，
+  # pacman 会判「数据库记录名字无效」。
+  ( cd "$tmp" && bsdtar -cf ../normalized.tar --format=ustar * )
+  gzip -n -9 -c "$tmp/../normalized.tar" > "$f"
+  rm -rf "$tmp" "$tmp/../normalized.tar"
+}
+
 echo "== repo-add =="
 cd x86_64
 for f in *.pkg.tar.zst; do
   repo-add --quiet pkg-installer.db.tar.gz "$f"
 done
+# repo-add 会把上一版留成 *.old，那是它的备份习惯，不该进仓库
+rm -f ./*.old
+normalize_db pkg-installer.db.tar.gz
+normalize_db pkg-installer.files.tar.gz
 # GitHub Pages 是静态托管，符号链接会变成一小段文本文件，摊平成实体文件
 rm -f pkg-installer.db pkg-installer.files
 cp pkg-installer.db.tar.gz    pkg-installer.db
