@@ -21,11 +21,16 @@ permissions:
 
 jobs:
   publish:
+    # 用 ubuntu-latest 而不是 archlinux 容器：容器形式要求 runner 先拉镜像、
+    # 再进 chroot 起 steps，多了两层可能失败的地方。repo-add 由 Debian/Ubuntu
+    # 的 pacman-package-manager 提供，功能一样。
     runs-on: ubuntu-latest
-    container: archlinux:latest
     steps:
       - name: 装依赖
-        run: pacman -Syu --noconfirm --needed pacman git curl
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq pacman-package-manager
+          repo-add --version 2>/dev/null || true
 
       - name: 取 release 里的包
         env:
