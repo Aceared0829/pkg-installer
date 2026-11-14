@@ -1,0 +1,11 @@
+=== pkg-installer ===
+
+* '''Maintainer:''' [https://github.com/Aceared0829 Aceared0829]
+* '''Description:''' Install .deb, .rpm, .AppImage and .flatpak packages on Arch without root; checks the official repos and the AUR first, and translates foreign dependency names to Arch ones.
+* '''Upstream page:''' https://github.com/Aceared0829/pkg-installer
+
+{{bc|<nowiki>
+[pkg-installer]
+SigLevel = Optional TrustAll
+Server = https://aceared0829.github.io/pkg-installer/x86_64
+</nowiki>}}

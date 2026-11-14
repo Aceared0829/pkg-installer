@@ -14,7 +14,7 @@
 
 这个工具换个思路：**不试图让 Arch 变成 Debian 或 Fedora，而是把包里自包含的那部分解出来，装进你的家目录。**
 
-![界面](docs/screenshots/02-aur-hit.png)
+![拖进去，它先告诉你有没有更好的办法](docs/demo.gif)
 
 [English](#english)
 
@@ -283,6 +283,8 @@ ln -sfn ~/.local/opt/新包/usr/bin/foo  ~/.local/bin/foo
 bin/pkg2local       后端（bash，1177 行），所有实际逻辑在这里
 bin/pkg-installer   图形前端（Python + GTK4 + libadwaita，1194 行）
 desktop/            桌面条目模板和应用图标
+docs/demo.gif       操作演示（真机录制，逐帧抓取）
+docs/share-card.png 社交分享卡片（1200×630）
 docs/screenshots/   真机截图，非设计稿
 install.sh          安装 / 卸载
 PKGBUILD .SRCINFO   Arch 打包配方（src/ pkg/ 等构建产物不入库）
@@ -303,6 +305,8 @@ Plenty of software ships only a `.deb` or `.rpm`. Arch may have `dpkg` installed
 `.AppImage` and `.flatpak` sit outside the idea of "installing": the first is a single-file program carrying its own runtime, the second has its own sandboxed runtime. For those the tool **registers** the program — icon, desktop entry, launcher — instead of unpacking it into `~/.local/opt`.
 
 This tool takes a different angle: **instead of turning Arch into Debian or Fedora, it extracts the self-contained part of a package and installs it into your home directory.**
+
+![Drag a package in; it tells you first whether there is a better way](docs/demo.gif)
 
 ### What it does
 
