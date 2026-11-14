@@ -4,6 +4,26 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>pkg-installer — 免 root 装 .deb / .rpm / .AppImage / .flatpak</title>
+<meta name="description" content="在 Arch 上装别的发行版的包：先查官方库和 AUR，有原生包就用原生包；没有就把依赖名翻译成 Arch 的，解包到 ~/.local，全程不需要 root，不写 pacman 数据库。">
+<meta name="theme-color" content="#2e496d">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="pkg-installer">
+<meta property="og:title" content="pkg-installer — 在 Arch 上装 .deb / .rpm / .AppImage / .flatpak">
+<meta property="og:description" content="先查官方库和 AUR，有原生包就用原生包；没有就翻译依赖、解包到 ~/.local。免 root，不污染 pacman 数据库。">
+<meta property="og:url" content="https://aceared0829.github.io/pkg-installer/">
+<meta property="og:image" content="https://aceared0829.github.io/pkg-installer/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="pkg-installer 界面：一个 deb 包被拖进来，提示 AUR 已有原生包，依赖齐全">
+<meta property="og:locale" content="zh_CN">
+
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="pkg-installer — 在 Arch 上装别的发行版的包">
+<meta name="twitter:description" content="先查官方库和 AUR，有原生包就用原生包；没有就翻译依赖、解包到 ~/.local。免 root，不污染 pacman 数据库。">
+<meta name="twitter:image" content="https://aceared0829.github.io/pkg-installer/og.png">
+
+<link rel="icon" href="og.png">
 <style>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
@@ -38,12 +58,36 @@
   }
   footer { margin-top: 48px; padding-top: 20px; border-top: 1px solid #e6e6e9; font-size: 14px; color: #6b6b73; }
   @media (prefers-color-scheme: dark) { footer { border-color: #3a3a40; color: #a0a0a8; } }
+
+  /* 演示动画：和下面的截图卡片同一套圆角与描边 */
+  .demo {
+    margin: 0 0 28px; border-radius: 14px; overflow: hidden;
+    border: 1px solid #e6e6e9; background: #fff;
+    box-shadow: 0 8px 28px rgba(30, 45, 70, 0.10);
+  }
+  @media (prefers-color-scheme: dark) {
+    .demo { border-color: #3a3a40; background: #2a2a2e; box-shadow: 0 8px 28px rgba(0,0,0,0.45); }
+  }
+  .demo img { display: block; width: 100%; height: auto; }
+  .demo figcaption {
+    padding: 10px 16px 12px; font-size: 13.5px; color: #6b6b73;
+    border-top: 1px solid #eeeef0;
+  }
+  @media (prefers-color-scheme: dark) {
+    .demo figcaption { border-color: #3a3a40; color: #a0a0a8; }
+  }
 </style>
 </head>
 <body>
 <main>
   <h1>pkg-installer</h1>
   <p class="sub">在 Arch 上装 <code>.deb</code> / <code>.rpm</code> / <code>.AppImage</code> / <code>.flatpak</code>，免 root，不污染 pacman 数据库。</p>
+
+  <figure class="demo">
+    <img src="demo.gif" width="880" height="690"
+         alt="拖入一个 deb 包，界面提示 AUR 已有原生包并给出 paru 命令；依赖齐全后安装，完成后列出已安装的应用">
+    <figcaption>拖进去 → 它先告诉你有没有更好的办法 → 装完列出装在哪儿。</figcaption>
+  </figure>
 
   <p>这是一个 pacman 仓库。加进去之后，它就和官方库里的包一样，能用 <code>pacman -Syu</code> 一起升级。</p>
 
